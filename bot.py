@@ -2,7 +2,7 @@
 import logging
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, WebAppInfo, MenuButtonWebApp
+from aiogram.types import InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.storage.memory import MemoryStorage
 from config import BOT_TOKEN, WEBAPP_URL, ADMIN_ID
@@ -313,6 +313,7 @@ async def notify_admin_new_suggestion(user_name: str, char_name: str, anime: str
         print(f"⚠️ Не смог уведомить админа: {e}")
 
 async def on_startup(bot: Bot):
+    # 1. Menu button (Mini App)
     try:
         if WEBAPP_URL and WEBAPP_URL.startswith("https"):
             await bot.set_chat_menu_button(
@@ -325,15 +326,34 @@ async def on_startup(bot: Bot):
     except Exception as e:
         print(f"⚠️ Menu button error: {e}")
 
-    # Команды бота
-    from aiogram.types import BotCommand
+    # 2. Команды бота (появляются при вводе /)
     try:
-        await bot.set_my_commands([
-            BotCommand(command="start", description="🎴 Главное меню"),
-            BotCommand(command="бонус", description="💰 Забрать монеты"),
-            BotCommand(command="balance", description="💼 Мой баланс"),
-        ])
-        print("✅ Команды установлены")
+        commands = [
+            BotCommand(command="start",       description="🎴 Главное меню"),
+            BotCommand(command="бонус",       description="💰 Забрать монеты (6ч)"),
+            BotCommand(command="крутить",     description="🎰 Крутка x1 (100💰)"),
+            BotCommand(command="крутить3",    description="🎰 Крутка x3 (270💰)"),
+            BotCommand(command="коллекция",   description="🎴 Моя коллекция"),
+            BotCommand(command="профиль",     description="💼 Мой профиль"),
+            BotCommand(command="предложка",   description="💡 Предложить карточку"),
+            BotCommand(command="помощь",      description="ℹ️ Список команд"),
+        ]
+
+        # Команда админки — ТОЛЬКО для тебя
+        # Устанавливаем общие команды для всех
+        await bot.set_my_commands(commands)
+
+        # Отдельные команды для админа (с /admin)
+        from aiogram.types import BotCommandScopeChat
+        admin_commands = commands + [
+            BotCommand(command="admin", description="👑 Админ-панель"),
+        ]
+        await bot.set_my_commands(
+            admin_commands,
+            scope=BotCommandScopeChat(chat_id=ADMIN_ID),
+        )
+
+        print(f"✅ Установлено {len(commands)} команд (для админа: {len(admin_commands)})")
     except Exception as e:
         print(f"⚠️ Commands error: {e}")
 
