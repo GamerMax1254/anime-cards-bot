@@ -55,8 +55,8 @@ async def cmd_start(message: types.Message):
     # Обычные кнопки (работают даже без Mini App)
     kb.row(InlineKeyboardButton(text="💰 Забрать монеты", callback_data="claim"))
     kb.row(
-        InlineKeyboardButton(text="🎰 x1 (100💰)", callback_data="pull1"),
-        InlineKeyboardButton(text="🎰 x3 (270💰)", callback_data="pull10"),
+        InlineKeyboardButton(text="🎰 x1 (300💰)", callback_data="pull1"),
+        InlineKeyboardButton(text="🎰 x3 (810💰)", callback_data="pull10"),
     )
     kb.row(InlineKeyboardButton(text="🎴 Коллекция", callback_data="my_collection"))
     kb.row(InlineKeyboardButton(text="💼 Баланс", callback_data="balance"))
@@ -239,6 +239,215 @@ async def collection_callback(callback: types.CallbackQuery):
     await callback.answer()
 
 
+# ============================================
+# КОМАНДЫ ДЛЯ /
+# ============================================
+
+@dp.message(Command("бонус", "bonus", "claim"))
+async def cmd_claim(message: types.Message):
+    """Быстрый сбор монет (каждые 6 часов)"""
+    db = get_session()
+    try:
+        gacha = GachaService(db)
+        result = gacha.claim_coins(message.from_user.id)
+    finally:
+        db.close()
+
+    if result["success"]:
+        await message.answer(
+            f"💰 <b>+{result['claimed']} монет!</b>\n\n"
+            f"💼 Баланс: <b>{result['coins']}</b>\n"
+            f"⏰ Следующий сбор через 6 часов",
+            parse_mode="HTML",
+        )
+    else:
+        await message.answer(
+            f"⏰ <b>Рано!</b>\n\n"
+            f"{result['message']}\n\n"
+            f"💰 Баланс: <b>{result['coins']}</b>",
+            parse_mode="HTML",
+        )
+
+
+@dp.message(Command("крутить", "pull", "roll"))
+async def cmd_pull(message: types.Message):
+    """Одна крутка"""
+    db = get_session()
+    try:
+        gacha = GachaService(db)
+        result = gacha.single_pull(message.from_user.id)
+    finally:
+        db.close()
+
+    if not result["success"]:
+        await message.answer(f"❌ {result['message']}", parse_mode="HTML")
+        return
+
+    card = result["card"]
+    stars = "⭐" * card["stars"]
+    new_mark = "🆕 <b>НОВАЯ!</b>" if card["is_new"] else "🔄 Дубликат"
+
+    text = (
+        f"🎰 <b>Результат:</b>\n\n"
+        f"{card['emoji']} <b>{card['name']}</b>\n"
+        f"{stars} {card['rarity_name']}\n"
+        f"📺 {card['anime']}\n"
+        f"⚔️{card['power']} 🛡{card['defense']} 💨{card['speed']}\n\n"
+        f"{new_mark}\n"
+    )
+
+    if not card["is_new"]:
+        text += f"💰 Компенсация: +{card['duplicate_coins']}💰\n"
+
+    text += f"\n💰 Баланс: {result['coins']}"
+
+    kb = InlineKeyboardBuilder()
+    kb.row(
+        InlineKeyboardButton(text="🎰 Ещё x1", callback_data="pull1"),
+        InlineKeyboardButton(text="🎰 x3", callback_data="pull10"),
+    )
+
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+@dp.message(Command("крутить3", "pull3", "roll3", "multi"))
+async def cmd_pull3(message: types.Message):
+    """Крутка x3"""
+    db = get_session()
+    try:
+        gacha = GachaService(db)
+        result = gacha.multi_pull(message.from_user.id)
+    finally:
+        db.close()
+
+    if not result["success"]:
+        await message.answer(f"❌ {result['message']}", parse_mode="HTML")
+        return
+
+    text = "🎰 <b>Результат x3:</b>\n\n"
+    for card in result["cards"]:
+        if "error" in card:
+            continue
+        new_mark = "🆕" if card["is_new"] else "🔄"
+        text += f"{new_mark} {card['emoji']} <b>{card['name']}</b> — {card['rarity_name']}\n"
+
+    text += f"\n✨ Новых: {result['new_count']}/3"
+    text += f"\n💰 Баланс: {result['coins']}"
+
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("коллекция", "collection", "cards"))
+async def cmd_collection(message: types.Message):
+    """Показать коллекцию"""
+    db = get_session()
+    try:
+        gacha = GachaService(db)
+        result = gacha.get_collection(message.from_user.id, page=1, per_page=15)
+    finally:
+        db.close()
+
+    if not result["cards"]:
+        await message.answer(
+            "🎴 <b>Коллекция пуста!</b>\n\n"
+            "Начни крутить: /крутить",
+            parse_mode="HTML",
+        )
+        return
+
+    text = f"🎴 <b>Твоя коллекция</b> — {result['completion']}%\n"
+    text += f"📊 {result['total_collected']}/{result['total_characters']}\n\n"
+
+    for card in result["cards"]:
+        info = card["rarity_info"]
+        stars = "⭐" * info["stars"]
+        fav = "❤️ " if card["is_favorite"] else ""
+        text += f"{fav}{info['emoji']} <b>{card['name']}</b> x{card['count']} {stars}\n"
+
+    # Кнопка Mini App для полного просмотра
+    kb = InlineKeyboardBuilder()
+    if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+        kb.row(InlineKeyboardButton(
+            text="🎴 Открыть в приложении",
+            web_app=WebAppInfo(url=WEBAPP_URL),
+        ))
+
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+
+
+@dp.message(Command("профиль", "profile", "balance", "me"))
+async def cmd_profile(message: types.Message):
+    """Профиль игрока"""
+    db = get_session()
+    try:
+        gacha = GachaService(db)
+        info = gacha.get_user_info(message.from_user.id)
+    finally:
+        db.close()
+
+    name = message.from_user.first_name or "Игрок"
+
+    text = (
+        f"💼 <b>Профиль {name}</b>\n\n"
+        f"💰 Монеты: <b>{info['coins']}</b>\n"
+        f"💎 Гемы: <b>{info['gems']}</b>\n"
+        f"🎴 Карточек: <b>{info['total_cards']}</b>\n"
+        f"🎰 Круток: <b>{info['total_pulls']}</b>\n"
+        f"🎯 Pity: <b>{info['pulls_since_pity']}/90</b>\n"
+    )
+
+    await message.answer(text, parse_mode="HTML")
+
+
+@dp.message(Command("предложка", "suggest"))
+async def cmd_suggest(message: types.Message):
+    """Информация о предложке"""
+    kb = InlineKeyboardBuilder()
+    if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+        kb.row(InlineKeyboardButton(
+            text="💡 Открыть форму",
+            web_app=WebAppInfo(url=WEBAPP_URL),
+        ))
+
+    await message.answer(
+        "💡 <b>Предложи персонажа!</b>\n\n"
+        "Открой приложение → таб «💡 Предложка»\n"
+        "Заполни форму (имя, аниме, редкость)\n"
+        "За одобрение получишь <b>+500 💰</b>\n\n"
+        "У тебя может быть до 3 предложений одновременно.",
+        reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("помощь", "help"))
+async def cmd_help(message: types.Message):
+    """Список всех команд"""
+    text = (
+        "ℹ️ <b>Команды бота</b>\n\n"
+        "🎴 <b>Основные:</b>\n"
+        "/start — главное меню\n"
+        "/бонус — забрать монеты (раз в 6ч)\n"
+        "/крутить — крутка x1 (300💰)\n"
+        "/крутить3 — крутка x3 (810💰)\n\n"
+        "🎴 <b>Коллекция:</b>\n"
+        "/коллекция — мои карточки\n"
+        "/профиль — статистика\n\n"
+        "💡 <b>Другое:</b>\n"
+        "/предложка — предложить новую карточку\n"
+        "/помощь — этот список\n"
+    )
+
+    if message.from_user.id == ADMIN_ID:
+        text += (
+            "\n👑 <b>Админ:</b>\n"
+            "/admin — админ-панель\n"
+        )
+
+    await message.answer(text, parse_mode="HTML")
+
+# ===========
+
 @dp.callback_query(F.data == "admin_menu")
 async def admin_btn(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -331,8 +540,8 @@ async def on_startup(bot: Bot):
         commands = [
             BotCommand(command="start",       description="🎴 Главное меню"),
             BotCommand(command="бонус",       description="💰 Забрать монеты (6ч)"),
-            BotCommand(command="крутить",     description="🎰 Крутка x1 (100💰)"),
-            BotCommand(command="крутить3",    description="🎰 Крутка x3 (270💰)"),
+            BotCommand(command="крутить",     description="🎰 Крутка x1 (300💰)"),
+            BotCommand(command="крутить3",    description="🎰 Крутка x3 (810💰)"),
             BotCommand(command="коллекция",   description="🎴 Моя коллекция"),
             BotCommand(command="профиль",     description="💼 Мой профиль"),
             BotCommand(command="предложка",   description="💡 Предложить карточку"),
