@@ -42,7 +42,6 @@ python run.py
 - FastAPI
 - SQLAlchemy
 - Telegram Mini App
-```
 
 ---
 
