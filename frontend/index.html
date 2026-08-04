@@ -1,0 +1,238 @@
+<!-- frontend/index.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Аниме Карточки</title>
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css?v=2">
+</head>
+<body>
+    <div id="app">
+        <!-- HEADER -->
+        <header class="header">
+            <div class="balance" id="balance-display">
+                <span class="coin-icon">💰</span>
+                <span id="coins">0</span>
+            </div>
+            <div class="user-info">
+                <span>🎴 <span id="cards-count">0</span></span>
+                <span class="pity-info">🎯 <span id="pity-count">0</span>/90</span>
+            </div>
+        </header>
+
+        <!-- TABS -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="gacha">🎰 Гача</button>
+            <button class="tab" data-tab="collection">🎴 Коллекция</button>
+            <button class="tab" data-tab="album">📖 Альбом</button>
+            <button class="tab" data-tab="profile">👤 Профиль</button>
+            <button class="tab" data-tab="suggest">💡 Предложка</button>
+        </nav>
+
+        <!-- ============ ГАЧА ============ -->
+        <section id="page-gacha" class="page active">
+            <div class="gacha-area">
+
+                <!-- Машина гачи -->
+                <div class="gacha-machine" id="gacha-machine">
+                    <div class="gacha-bg-effect"></div>
+                    <div class="gacha-orb" id="gacha-orb">
+                        <div class="orb-inner">?</div>
+                    </div>
+                    <p class="gacha-hint">Нажми кнопку чтобы крутить!</p>
+                </div>
+
+                <!-- Результат одной карточки -->
+                <div id="card-result" class="card-result hidden">
+                    <div class="card-reveal" id="card-reveal"></div>
+                    <button class="btn btn-close" id="close-result">Закрыть</button>
+                </div>
+
+                <!-- Результат x10 -->
+                <div id="multi-result" class="multi-overlay hidden">
+                    <h3>✨ Результаты x10</h3>
+                    <div id="multi-grid" class="multi-grid"></div>
+                    <button class="btn btn-close" id="close-multi">Закрыть</button>
+                </div>
+
+                <!-- Кнопки -->
+                <div class="gacha-buttons">
+                    <button class="btn btn-claim" id="btn-claim">
+                        <span>💰 Забрать монеты</span>
+                        <span class="timer" id="claim-timer"></span>
+                    </button>
+                    <div class="pull-buttons">
+                        <button class="btn btn-pull" id="btn-pull1">
+                            🎰 x1
+                            <span class="cost">300💰</span>
+                        </button>
+                        <button class="btn btn-pull-multi" id="btn-pull10">
+                            🎰 x3
+                            <span class="cost">900💰</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ КОЛЛЕКЦИЯ ============ -->
+        <section id="page-collection" class="page">
+            <div class="filters">
+                <select id="filter-rarity">
+                    <option value="">Все редкости</option>
+                    <option value="common">⬜ Обычная</option>
+                    <option value="uncommon">🟩 Необычная</option>
+                    <option value="rare">🟦 Редкая</option>
+                    <option value="epic">🟪 Эпическая</option>
+                    <option value="legendary">🟨 Легендарная</option>
+                    <option value="mythical">🟥 Мифическая</option>
+                    <option value="secret">💠 Секретная</option>
+                    <option value="unique">👑 Уникальная</option>
+                </select>
+            </div>
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+                <span class="progress-text" id="progress-text">0%</span>
+            </div>
+            <div id="collection-grid" class="cards-grid"></div>
+            <div class="load-more hidden" id="load-more-coll">
+                <button class="btn" id="btn-load-more">Загрузить ещё</button>
+            </div>
+        </section>
+
+        <!-- ============ АЛЬБОМ ============ -->
+        <section id="page-album" class="page">
+            <p class="album-hint">Все персонажи в игре. Неполученные скрыты.</p>
+            <div id="album-grid" class="cards-grid album-grid"></div>
+        </section>
+
+        <!-- ============ ПРОФИЛЬ ============ -->
+        <section id="page-profile" class="page">
+            <div class="profile-card" id="profile-card">
+                <div class="profile-bg" id="profile-bg"></div>
+                <div class="profile-overlay"></div>
+                <div class="profile-content">
+                    <h2 id="profile-name">Игрок</h2>
+                    <p id="profile-fav" class="profile-fav"></p>
+                    <div class="profile-stats">
+                        <div class="stat">
+                            <span class="stat-value" id="p-coins">0</span>
+                            <span class="stat-label">💰 Монеты</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="p-cards">0</span>
+                            <span class="stat-label">🎴 Карточки</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="p-pulls">0</span>
+                            <span class="stat-label">🎰 Крутки</span>
+                        </div>
+                        <div class="stat">
+                            <span class="stat-value" id="p-pity">0/90</span>
+                            <span class="stat-label">🎯 Pity</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <p style="text-align:center;color:var(--text2);font-size:12px;margin-top:16px">
+                💡 Нажми на карточку в коллекции чтобы поставить её на фон
+            </p>
+        </section>
+
+        <section id="page-suggest" class="page">
+            <div class="suggest-intro">
+                <h2>💡 Предложи персонажа</h2>
+                <p>Заполни форму — админ рассмотрит<br>За одобрение получишь <b>+500 💰</b></p>
+            </div>
+
+            <div class="suggest-form">
+                <div class="form-field">
+                    <label>🖼 Картинка (необязательно)</label>
+                    <div class="sg-image-upload">
+                        <img id="sg-preview-img" class="sg-preview hidden">
+                        <input type="file" id="sg-image-input" accept="image/jpeg,image/png,image/webp" hidden>
+                        <input type="hidden" id="sg-image-url-hidden">
+                        <label for="sg-image-input" class="sg-file-btn">
+                            📁 Выбрать файл
+                        </label>
+                        <button type="button" class="sg-clear-btn hidden" onclick="clearSgImage()">
+                            🗑 Убрать
+                        </button>
+                    </div>
+                    <p class="sg-hint" id="sg-image-hint">JPG, PNG, WEBP • до 5 МБ</p>
+                </div>
+
+                <div class="form-field">
+                    <label data-required="*">🇬🇧 Имя (English)</label>
+                    <input type="text" id="sg-name-en" placeholder="Naruto Uzumaki" maxlength="200">
+                </div>
+
+                <div class="form-field">
+                    <label>🇷🇺 Имя (Русский)</label>
+                    <input type="text" id="sg-name-ru" placeholder="Наруто Узумаки" maxlength="200">
+                </div>
+
+                <div class="form-field">
+                    <label>🇯🇵 Имя (Японский)</label>
+                    <input type="text" id="sg-name-jp" placeholder="うずまきナルト" maxlength="200">
+                </div>
+
+                <div class="form-field">
+                    <label data-required="*">📺 Аниме</label>
+                    <input type="text" id="sg-anime" placeholder="Naruto" maxlength="300">
+                </div>
+
+                <div class="form-field">
+                    <label>⭐ Предлагаемая редкость</label>
+                    <select id="sg-rarity">
+                        <option value="common">⬜ Обычная</option>
+                        <option value="uncommon">🟩 Необычная</option>
+                        <option value="rare">🟦 Редкая</option>
+                        <option value="epic">🟪 Эпическая</option>
+                        <option value="legendary">🟨 Легендарная</option>
+                        <option value="mythical">🟥 Мифическая</option>
+                        <option value="secret">💠 Секретная</option>
+                    </select>
+                </div>
+
+                <div class="form-field">
+                    <label>📝 Описание</label>
+                    <textarea id="sg-desc" rows="3" maxlength="1000" placeholder="Расскажи о персонаже..."></textarea>
+                </div>
+
+                <div class="stats-row">
+                    <div class="form-field">
+                        <label>⚔️ ATK</label>
+                        <input type="number" id="sg-power" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-field">
+                        <label>🛡 DEF</label>
+                        <input type="number" id="sg-defense" min="0" max="100" value="50">
+                    </div>
+                    <div class="form-field">
+                        <label>💨 SPD</label>
+                        <input type="number" id="sg-speed" min="0" max="100" value="50">
+                    </div>
+                </div>
+
+                <button class="btn" id="sg-submit">
+                    📤 Отправить предложение
+                </button>
+            </div>
+
+            <div class="my-suggestions">
+                <h3>📜 Мои предложения</h3>
+                <div id="sg-list"></div>
+            </div>
+        </section>
+
+        <!-- TOAST -->
+        <div id="toast" class="toast hidden"></div>
+    </div>
+
+    <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>

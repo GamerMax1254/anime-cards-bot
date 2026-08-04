@@ -1,0 +1,304 @@
+<!-- frontend/admin.html -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Админ-панель — Аниме Карточки</title>
+    <link rel="stylesheet" href="/static/css/admin.css">
+</head>
+<body>
+    <div id="login-screen" class="login-screen">
+        <div class="login-box">
+            <h1>👑 Админ-панель</h1>
+            <p id="login-status">Проверка доступа...</p>
+        </div>
+    </div>
+
+    <div id="admin-app" class="admin-app hidden">
+        <!-- HEADER -->
+        <header class="admin-header">
+            <h1>👑 Админ-панель</h1>
+            <div class="stats-mini">
+                <span>🎴 <b id="stat-chars">0</b></span>
+                <span>📺 <b id="stat-anime">0</b></span>
+                <span>👥 <b id="stat-users">0</b></span>
+            </div>
+        </header>
+
+        <!-- TABS -->
+        <nav class="admin-tabs">
+            <button class="tab active" data-tab="characters">🎴 Карточки</button>
+            <button class="tab" data-tab="anime">📺 Аниме</button>
+            <button class="tab" data-tab="users">👥 Игроки</button>
+            <button class="tab" data-tab="give">🎁 Выдача</button>
+            <button class="tab" data-tab="suggestions">💡 Предложки <span id="badge-suggestions" class="badge hidden">0</span></button>
+            <button class="tab" data-tab="logs">📜 Логи</button>
+        </nav>
+
+        <!-- КАРТОЧКИ -->
+        <section id="page-characters" class="page active">
+            <div class="toolbar">
+                <input type="text" id="search-char" placeholder="🔍 Поиск...">
+                <select id="filter-rarity">
+                    <option value="">Все редкости</option>
+                </select>
+                <button class="btn btn-primary" onclick="openCharModal()">➕ Добавить</button>
+            </div>
+
+            <table class="admin-table">
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>🖼</th>
+                        <th>Имя</th>
+                        <th>Аниме</th>
+                        <th>Редкость</th>
+                        <th>Статы</th>
+                        <th>✅</th>
+                        <th>⚙</th>
+                    </tr>
+                </thead>
+                <tbody id="chars-tbody"></tbody>
+            </table>
+        </section>
+
+        <!-- АНИМЕ -->
+        <section id="page-anime" class="page">
+            <div class="toolbar">
+                <button class="btn btn-primary" onclick="openAnimeModal()">➕ Добавить аниме</button>
+            </div>
+            <table class="admin-table">
+                <thead>
+                    <tr><th>ID</th><th>Название (EN)</th><th>Название (RU)</th><th>Жанр</th><th>Персонажей</th></tr>
+                </thead>
+                <tbody id="anime-tbody"></tbody>
+            </table>
+        </section>
+
+        <!-- ИГРОКИ -->
+        <section id="page-users" class="page">
+            <table class="admin-table">
+                <thead>
+                    <tr><th>TG ID</th><th>Имя</th><th>@username</th><th>💰</th><th>🎴</th><th>🎰</th><th>⚙</th></tr>
+                </thead>
+                <tbody id="users-tbody"></tbody>
+            </table>
+        </section>
+
+        <!-- ВЫДАЧА -->
+        <section id="page-give" class="page">
+            <div class="give-forms">
+                <div class="form-box">
+                    <h3>💰 Выдать монеты</h3>
+                    <input type="number" id="give-user-id" placeholder="Telegram ID">
+                    <input type="number" id="give-coins-amount" placeholder="Кол-во (можно минус)">
+                    <button class="btn btn-primary" onclick="giveCoins()">Выдать</button>
+                </div>
+
+                <div class="form-box">
+                    <h3>🎴 Выдать карточку</h3>
+                    <input type="number" id="give-card-user" placeholder="Telegram ID">
+                    <input type="number" id="give-card-id" placeholder="ID карточки">
+                    <button class="btn btn-primary" onclick="giveCard()">Выдать</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ЛОГИ -->
+        <section id="page-logs" class="page">
+            <table class="admin-table">
+                <thead><tr><th>Время</th><th>Действие</th><th>Детали</th><th>Юзер</th></tr></thead>
+                <tbody id="logs-tbody"></tbody>
+            </table>
+        </section>
+
+        <section id="page-suggestions" class="page">
+            <div class="toolbar">
+                <select id="sg-filter" onchange="loadSuggestions()">
+                    <option value="pending">⏳ На проверке</option>
+                    <option value="approved">✅ Одобренные</option>
+                    <option value="rejected">❌ Отклонённые</option>
+                    <option value="all">Все</option>
+                </select>
+            </div>
+            <div id="sg-admin-list"></div>
+        </section>
+    </div>
+
+    <!-- МОДАЛКА: КАРТОЧКА -->
+    <div id="char-modal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2 id="char-modal-title">➕ Новая карточка</h2>
+                <button class="modal-close" onclick="closeCharModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="form-row-full">
+                        <label>🖼 Картинка</label>
+                        <div class="image-upload">
+                            <img id="char-preview" src="" class="img-preview hidden">
+                            <input type="file" id="char-image-file" accept="image/*" onchange="uploadCharImage()">
+                            <input type="hidden" id="char-image-url">
+                            <label for="char-image-file" class="btn btn-secondary">📁 Выбрать файл</label>
+                        </div>
+                    </div>
+
+                    <div>
+                        <label>Имя (EN) *</label>
+                        <input type="text" id="char-name-en" required>
+                    </div>
+                    <div>
+                        <label>Имя (RU)</label>
+                        <input type="text" id="char-name-ru">
+                    </div>
+                    <div>
+                        <label>Имя (JP)</label>
+                        <input type="text" id="char-name-jp">
+                    </div>
+                    <div>
+                        <label>Аниме</label>
+                        <select id="char-anime"></select>
+                    </div>
+                    <div>
+                        <label>Редкость</label>
+                        <select id="char-rarity"></select>
+                    </div>
+                    <div>
+                        <label>Активна</label>
+                        <select id="char-active">
+                            <option value="true">✅ Да</option>
+                            <option value="false">🚫 Нет</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>⚔️ Power</label>
+                        <input type="number" id="char-power" value="50" min="0" max="100">
+                    </div>
+                    <div>
+                        <label>🛡 Defense</label>
+                        <input type="number" id="char-defense" value="50" min="0" max="100">
+                    </div>
+                    <div>
+                        <label>💨 Speed</label>
+                        <input type="number" id="char-speed" value="50" min="0" max="100">
+                    </div>
+                    <div class="form-row-full">
+                        <label>📝 Описание</label>
+                        <textarea id="char-description" rows="3"></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger" id="char-delete-btn" onclick="deleteChar()">🗑 Удалить</button>
+                <button class="btn btn-secondary" onclick="closeCharModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="saveChar()">💾 Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- МОДАЛКА: АНИМЕ -->
+    <div id="anime-modal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>➕ Новое аниме</h2>
+                <button class="modal-close" onclick="closeAnimeModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-grid">
+                    <div class="form-row-full">
+                        <label>Название (EN) *</label>
+                        <input type="text" id="anime-title-en">
+                    </div>
+                    <div class="form-row-full">
+                        <label>Название (RU)</label>
+                        <input type="text" id="anime-title-ru">
+                    </div>
+                    <div class="form-row-full">
+                        <label>Жанр</label>
+                        <input type="text" id="anime-genre" placeholder="shounen,action">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeAnimeModal()">Отмена</button>
+                <button class="btn btn-primary" onclick="saveAnime()">💾 Сохранить</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Модалка проверки предложения -->
+    <div id="sg-modal" class="modal hidden">
+        <div class="modal-content modal-large">
+            <div class="modal-header">
+                <h2>💡 Проверка предложения</h2>
+                <button class="modal-close" onclick="closeSgModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="sg-modal-info"></div>
+                <hr style="border-color:var(--border);margin:16px 0">
+                <p style="color:var(--text2);font-size:12px;margin-bottom:12px">
+                    💡 Можно отредактировать данные перед одобрением
+                </p>
+                <div class="form-grid">
+                    <div class="form-row-full">
+                        <label>🖼 Картинка (загрузи)</label>
+                        <div class="image-upload">
+                            <img id="sg-preview" src="" class="img-preview hidden">
+                            <input type="file" id="sg-image-file" accept="image/*" onchange="uploadSgImage()">
+                            <input type="hidden" id="sg-image-url">
+                            <label for="sg-image-file" class="btn btn-secondary">📁 Файл</label>
+                        </div>
+                    </div>
+                    <div>
+                        <label>Имя (EN)</label>
+                        <input type="text" id="sg-e-name-en">
+                    </div>
+                    <div>
+                        <label>Имя (RU)</label>
+                        <input type="text" id="sg-e-name-ru">
+                    </div>
+                    <div>
+                        <label>Имя (JP)</label>
+                        <input type="text" id="sg-e-name-jp">
+                    </div>
+                    <div>
+                        <label>Редкость</label>
+                        <select id="sg-e-rarity"></select>
+                    </div>
+                    <div>
+                        <label>⚔️ Power</label>
+                        <input type="number" id="sg-e-power" min="0" max="100">
+                    </div>
+                    <div>
+                        <label>🛡 Defense</label>
+                        <input type="number" id="sg-e-defense" min="0" max="100">
+                    </div>
+                    <div>
+                        <label>💨 Speed</label>
+                        <input type="number" id="sg-e-speed" min="0" max="100">
+                    </div>
+                    <div class="form-row-full">
+                        <label>Описание</label>
+                        <textarea id="sg-e-description" rows="3"></textarea>
+                    </div>
+                    <div class="form-row-full">
+                        <label>💬 Комментарий для пользователя (опционально)</label>
+                        <textarea id="sg-e-comment" rows="2" placeholder="Причина отказа / комментарий..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-danger" onclick="rejectSg()">❌ Отклонить</button>
+                <button class="btn btn-secondary" onclick="closeSgModal()">Отмена</button>
+                <button class="btn btn-success" onclick="approveSg()">✅ Одобрить</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="/static/js/admin.js"></script>
+</body>
+</html>
