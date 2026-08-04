@@ -61,3 +61,4 @@ python run.py
 7. git remote add origin URL_РЕПО
    git branch -M main
    git push -u origin main
+```

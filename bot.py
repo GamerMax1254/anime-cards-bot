@@ -56,7 +56,7 @@ async def cmd_start(message: types.Message):
     kb.row(InlineKeyboardButton(text="💰 Забрать монеты", callback_data="claim"))
     kb.row(
         InlineKeyboardButton(text="🎰 x1 (100💰)", callback_data="pull1"),
-        InlineKeyboardButton(text="🎰 x3 (810💰)", callback_data="pull10"),
+        InlineKeyboardButton(text="🎰 x3 (270💰)", callback_data="pull10"),
     )
     kb.row(InlineKeyboardButton(text="🎴 Коллекция", callback_data="my_collection"))
     kb.row(InlineKeyboardButton(text="💼 Баланс", callback_data="balance"))
