@@ -25,12 +25,30 @@ except Exception as e:
     print(f"⚠️ Ошибка админки: {e}")
 
 
+def is_private_chat(message: types.Message) -> bool:
+    """Проверка что чат приватный (не группа)"""
+    return message.chat.type == "private"
+
+
+def add_webapp_button(kb, text: str, url: str, is_private: bool):
+    """Добавить кнопку — WebApp в ЛС, обычная ссылка в группе"""
+    if is_private:
+        kb.row(InlineKeyboardButton(
+            text=text,
+            web_app=WebAppInfo(url=url),
+        ))
+    else:
+        kb.row(InlineKeyboardButton(
+            text=text,
+            url=url,
+        ))
+        
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    """Стартовая команда"""
-    print(f"📨 /start от {message.from_user.id} ({message.from_user.first_name})")
+    """Стартовая команда — работает в ЛС и в группах"""
 
-    # Регистрируем пользователя
+    # Регистрируем юзера
     db = get_session()
     try:
         gacha = GachaService(db)
@@ -42,39 +60,67 @@ async def cmd_start(message: types.Message):
     finally:
         db.close()
 
-    # Клавиатура
+    # Определяем тип чата
+    is_private = message.chat.type == "private"
+
     kb = InlineKeyboardBuilder()
 
-    # Кнопка Mini App
-    if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+    if is_private:
+        # ============ ЛИЧНЫЕ СООБЩЕНИЯ ============
+        # Тут можно использовать WebApp кнопки
+
+        if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+            kb.row(InlineKeyboardButton(
+                text="🎴 Открыть игру",
+                web_app=WebAppInfo(url=WEBAPP_URL),
+            ))
+
+        kb.row(
+            InlineKeyboardButton(text="💰 Забрать (6ч)", callback_data="claim"),
+        )
+        kb.row(
+            InlineKeyboardButton(text="🎰 x1 (300💰)", callback_data="pull1"),
+            InlineKeyboardButton(text="🎰 x3 (810💰)", callback_data="pull10"),
+        )
+        kb.row(InlineKeyboardButton(text="🎴 Коллекция", callback_data="my_collection"))
+        kb.row(InlineKeyboardButton(text="💼 Баланс", callback_data="balance"))
+
+        if message.from_user.id == ADMIN_ID:
+            kb.row(InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_menu"))
+
+        text = (
+            "🎴 <b>Аниме Карточки</b>\n\n"
+            "Собирай карточки любимых персонажей!\n\n"
+            "💰 <b>Обычный сбор</b> — каждые 6 часов\n"
+            "🎰 Крути гачу и собирай!\n\n"
+            "Выбери действие 👇"
+        )
+
+    else:
+        # ============ ГРУППЫ ============
+        # Тут WebApp нельзя, используем обычные url-кнопки
+
+        # Кнопка "Открыть игру" — через ссылку на приватный чат с ботом
+        bot_username = (await bot.get_me()).username
         kb.row(InlineKeyboardButton(
-            text="🎴 Открыть игру",
-            web_app=WebAppInfo(url=WEBAPP_URL),
+            text="🎮 Начать играть",
+            url=f"https://t.me/{bot_username}?start=play",
         ))
 
-    # Обычные кнопки (работают даже без Mini App)
-    kb.row(InlineKeyboardButton(text="💰 Забрать монеты", callback_data="claim"))
-    kb.row(
-        InlineKeyboardButton(text="🎰 x1 (300💰)", callback_data="pull1"),
-        InlineKeyboardButton(text="🎰 x3 (810💰)", callback_data="pull10"),
-    )
-    kb.row(InlineKeyboardButton(text="🎴 Коллекция", callback_data="my_collection"))
-    kb.row(InlineKeyboardButton(text="💼 Баланс", callback_data="balance"))
+        # Кнопка Mini App в браузере (открывается вне Telegram)
+        if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+            kb.row(InlineKeyboardButton(
+                text="🌐 Открыть в браузере",
+                url=WEBAPP_URL,
+            ))
 
-    # Админка — только для тебя
-    if message.from_user.id == ADMIN_ID:
-        kb.row(InlineKeyboardButton(text="👑 Админ-панель", callback_data="admin_menu"))
+        text = (
+            "🎴 <b>Аниме Карточки</b>\n\n"
+            "Собирай карточки любимых персонажей!\n\n"
+            "👇 Нажми чтобы начать (в личке с ботом)"
+        )
 
-    await message.answer(
-        "🎴 <b>Аниме Карточки</b>\n\n"
-        "Собирай карточки любимых персонажей!\n\n"
-        "💰 Монеты каждые 6 часов\n"
-        "🎰 Крути гачу\n"
-        "⭐ Собери полную коллекцию!\n\n"
-        "Выбери действие 👇",
-        reply_markup=kb.as_markup(),
-        parse_mode="HTML",
-    )
+    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
 
 
 @dp.message(Command("myid"))
