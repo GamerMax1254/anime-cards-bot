@@ -243,6 +243,31 @@ async def collection_callback(callback: types.CallbackQuery):
 # КОМАНДЫ ДЛЯ /
 # ============================================
 
+@dp.message(Command("помощь", "help"))
+async def cmd_help(message: types.Message):
+    text = (
+        "ℹ️ <b>Команды бота</b>\n\n"
+
+        "🎴 <b>Основные:</b>\n"
+        "/start — главное меню\n"
+        "/bonus или /бонус — забрать монеты (6ч)\n"
+        "/pull или /крутить — крутка x1 (300💰)\n"
+        "/pull3 или /крутить3 — крутка x3 (810💰)\n\n"
+
+        "🎴 <b>Коллекция:</b>\n"
+        "/collection или /коллекция — мои карточки\n"
+        "/profile или /профиль — статистика\n\n"
+
+        "💡 <b>Другое:</b>\n"
+        "/suggest или /предложка — предложить карточку\n"
+        "/help или /помощь — этот список\n"
+    )
+
+    if message.from_user.id == ADMIN_ID:
+        text += "\n👑 <b>Админ:</b>\n/admin — админ-панель\n"
+
+    await message.answer(text, parse_mode="HTML")
+
 @dp.message(Command("бонус", "bonus", "claim"))
 async def cmd_claim(message: types.Message):
     """Быстрый сбор монет (каждые 6 часов)"""
@@ -522,7 +547,9 @@ async def notify_admin_new_suggestion(user_name: str, char_name: str, anime: str
         print(f"⚠️ Не смог уведомить админа: {e}")
 
 async def on_startup(bot: Bot):
-    # 1. Menu button (Mini App)
+    """Инициализация при запуске бота"""
+
+    # ========== 1. Menu Button ==========
     try:
         if WEBAPP_URL and WEBAPP_URL.startswith("https"):
             await bot.set_chat_menu_button(
@@ -531,29 +558,43 @@ async def on_startup(bot: Bot):
                     web_app=WebAppInfo(url=WEBAPP_URL),
                 )
             )
-            print("✅ Menu button установлена")
+            print(f"✅ Menu button установлена: {WEBAPP_URL}")
+        else:
+            print(f"⚠️ WEBAPP_URL некорректный: {WEBAPP_URL}")
     except Exception as e:
-        print(f"⚠️ Menu button error: {e}")
+        print(f"❌ Menu button error: {e}")
 
-    # 2. Команды бота (появляются при вводе /)
+    # ========== 2. Команды бота ==========
+    from aiogram.types import (
+        BotCommand,
+        BotCommandScopeChat,
+        BotCommandScopeAllPrivateChats,
+        BotCommandScopeAllGroupChats,
+    )
+
+    # ⚠️ ВАЖНО: команды ТОЛЬКО на английском!
+    # Русские алиасы (/бонус, /крутить) работают из кода,
+    # но в меню Telegram их нельзя.
+    commands = [
+        BotCommand(command="start",      description="🎴 Главное меню"),
+        BotCommand(command="bonus",      description="💰 Забрать монеты (6ч)"),
+        BotCommand(command="pull",       description="🎰 Крутка x1 (300💰)"),
+        BotCommand(command="pull3",      description="🎰 Крутка x3 (810💰)"),
+        BotCommand(command="collection", description="🎴 Моя коллекция"),
+        BotCommand(command="profile",    description="💼 Мой профиль"),
+        BotCommand(command="suggest",    description="💡 Предложить карточку"),
+        BotCommand(command="help",       description="ℹ️ Список команд"),
+    ]
+
     try:
-        commands = [
-            BotCommand(command="start",       description="🎴 Главное меню"),
-            BotCommand(command="бонус",       description="💰 Забрать монеты (6ч)"),
-            BotCommand(command="крутить",     description="🎰 Крутка x1 (300💰)"),
-            BotCommand(command="крутить3",    description="🎰 Крутка x3 (810💰)"),
-            BotCommand(command="коллекция",   description="🎴 Моя коллекция"),
-            BotCommand(command="профиль",     description="💼 Мой профиль"),
-            BotCommand(command="предложка",   description="💡 Предложить карточку"),
-            BotCommand(command="помощь",      description="ℹ️ Список команд"),
-        ]
+        # Сбрасываем старые команды
+        await bot.delete_my_commands()
 
-        # Команда админки — ТОЛЬКО для тебя
-        # Устанавливаем общие команды для всех
+        # Ставим общие
         await bot.set_my_commands(commands)
+        print(f"✅ Установлено команд: {len(commands)}")
 
-        # Отдельные команды для админа (с /admin)
-        from aiogram.types import BotCommandScopeChat
+        # Дополнительно для админа
         admin_commands = commands + [
             BotCommand(command="admin", description="👑 Админ-панель"),
         ]
@@ -561,10 +602,10 @@ async def on_startup(bot: Bot):
             admin_commands,
             scope=BotCommandScopeChat(chat_id=ADMIN_ID),
         )
+        print(f"✅ У админа: {len(admin_commands)} команд")
 
-        print(f"✅ Установлено {len(commands)} команд (для админа: {len(admin_commands)})")
     except Exception as e:
-        print(f"⚠️ Commands error: {e}")
+        print(f"❌ Commands error: {e}")
 
 
 dp.startup.register(on_startup)
