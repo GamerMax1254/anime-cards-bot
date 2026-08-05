@@ -27,13 +27,11 @@ except Exception as e:
 
 @dp.callback_query(F.data.startswith("coll_page_"))
 async def coll_page_callback(callback: types.CallbackQuery):
-    """Пагинация коллекции"""
+    """Обратная совместимость - переход на страницу"""
     try:
         page = int(callback.data.split("_")[-1])
     except:
-        await callback.answer("❌ Ошибка страницы")
-        return
-
+        page = 1
     await show_collection_page(callback, page=page, edit=True)
     await callback.answer()
 
@@ -217,12 +215,57 @@ async def noop_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("coll_filter_"))
 async def coll_filter_callback(callback: types.CallbackQuery):
-    """Фильтр коллекции по редкости"""
-    rarity = callback.data.replace("coll_filter_", "")
-    if rarity == "all":
-        rarity = None
-    await show_collection_page(callback, page=1, edit=True, rarity=rarity)
-    await callback.answer(f"Фильтр: {rarity or 'все'}")
+    """Фильтр + пагинация: coll_filter_{rarity}_{page}"""
+    parts = callback.data.split("_")
+    # coll_filter_all_1  или  coll_filter_legendary_2
+
+    if len(parts) >= 4:
+        rarity = parts[2]
+        try:
+            page = int(parts[3])
+        except:
+            page = 1
+    else:
+        rarity = "all"
+        page = 1
+
+    await show_collection_page(
+        callback,
+        page=page,
+        edit=True,
+        rarity_filter=rarity if rarity != "all" else None,
+        sort_by="rarity_desc",
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("coll_sort_"))
+async def coll_sort_callback(callback: types.CallbackQuery):
+    """Смена сортировки: coll_sort_{sort_key}_{rarity}_{page}"""
+    parts = callback.data.split("_")
+
+    if len(parts) < 5:
+        await callback.answer("❌ Ошибка")
+        return
+
+    # sort_key может быть многосоставным (rarity_desc)
+    # Формат: coll_sort_{sort}_{rarity}_{page}
+    try:
+        page = int(parts[-1])
+        rarity = parts[-2]
+        sort_key = "_".join(parts[2:-2])
+    except:
+        await callback.answer("❌ Ошибка параметров")
+        return
+
+    await show_collection_page(
+        callback,
+        page=page,
+        edit=True,
+        rarity_filter=rarity if rarity != "all" else None,   # ← правильное имя
+        sort_by=sort_key,
+    )
+    await callback.answer(f"Сортировка обновлена")
 
 
 def is_private_chat(message: types.Message) -> bool:
