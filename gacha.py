@@ -10,7 +10,7 @@ class GachaService:
     def __init__(self, db: Session):
         self.db = db
 
-    def x(self, telegram_id, username=None, first_name=None):
+    def get_or_create_user(self, telegram_id, username=None, first_name=None):
         user = self.db.query(User).filter(User.telegram_id == telegram_id).first()
         if not user:
             user = User(
