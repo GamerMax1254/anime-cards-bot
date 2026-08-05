@@ -1,7 +1,7 @@
 # bot.py
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardButton, WebAppInfo, MenuButtonWebApp, BotCommand
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -23,6 +23,136 @@ except ImportError as e:
     print(f"⚠️ Админка не загружена: {e}")
 except Exception as e:
     print(f"⚠️ Ошибка админки: {e}")
+
+
+@dp.callback_query(F.data.startswith("coll_page_"))
+async def coll_page_callback(callback: types.CallbackQuery):
+    """Пагинация коллекции"""
+    try:
+        page = int(callback.data.split("_")[-1])
+    except:
+        await callback.answer("❌ Ошибка страницы")
+        return
+
+    await show_collection_page(callback, page=page, edit=True)
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("view_card_"))
+async def view_card_callback(callback: types.CallbackQuery):
+    """Показать детали карточки через inline-кнопку"""
+    try:
+        card_id = int(callback.data.split("_")[-1])
+    except:
+        await callback.answer("❌ Ошибка ID")
+        return
+
+    # Получаем данные
+    db = get_session()
+    try:
+        from database import Character, User, UserCard
+
+        char = db.query(Character).get(card_id)
+        if not char:
+            await callback.answer("❌ Карточка не найдена", show_alert=True)
+            return
+
+        user_card = db.query(UserCard).filter(
+            UserCard.user_id == callback.from_user.id,
+            UserCard.character_id == card_id,
+        ).first()
+
+        total_users = db.query(User).count()
+        owners_count = db.query(UserCard).filter(
+            UserCard.character_id == card_id,
+        ).distinct(UserCard.user_id).count()
+        percentage = round((owners_count / total_users * 100), 2) if total_users > 0 else 0
+
+    finally:
+        db.close()
+
+    # Формируем текст
+    info = char.rarity_info
+    stars = "⭐" * info["stars"]
+
+    text = (
+        f"🎴 <b>Информация о персонаже</b>\n\n"
+        f"🆔 <b>ID:</b> <code>{char.id}</code>\n"
+        f"👤 <b>Имя:</b> {char.display_name}"
+    )
+
+    if char.name_en and char.name_en != char.display_name:
+        text += f" (<i>{char.name_en}</i>)"
+
+    text += f"\n📺 <b>Тайтл:</b> {char.anime_title}\n"
+    text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
+    text += f"⚔️ <b>Статы:</b> ATK {char.power} | DEF {char.defense} | SPD {char.speed}\n"
+
+    if char.description:
+        text += f"\n📖 <i>{char.description}</i>\n"
+
+    text += "\n━━━━━━━━━━━━━━━━━━\n"
+
+    if user_card:
+        fav = " ⭐" if user_card.is_favorite else ""
+        text += f"\n✅ <b>Есть у вас:</b> {user_card.count} шт.{fav}"
+    else:
+        text += f"\n❌ <b>У вас нет этой карточки</b>"
+
+    text += f"\n🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)"
+
+    # Кнопки
+    kb = InlineKeyboardBuilder()
+    kb.row(InlineKeyboardButton(
+        text="⬅️ Назад к коллекции",
+        callback_data="coll_page_1",
+    ))
+
+    if callback.message.chat.type == "private":
+        add_game_button(kb, True, text="🎴 Открыть в приложении")
+
+    # Пытаемся отредактировать (если было сообщение с текстом)
+    # Или отправляем новое (если было с фото)
+    try:
+        # Если картинка есть — отправляем новое сообщение
+        if char.image_url and char.image_url.startswith(("http://", "https://")):
+            await callback.message.answer_photo(
+                photo=char.image_url,
+                caption=text,
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML",
+            )
+        else:
+            await callback.message.edit_text(
+                text,
+                reply_markup=kb.as_markup(),
+                parse_mode="HTML",
+            )
+    except Exception as e:
+        # Fallback — просто отправить
+        await callback.message.answer(
+            text,
+            reply_markup=kb.as_markup(),
+            parse_mode="HTML",
+        )
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "noop")
+async def noop_callback(callback: types.CallbackQuery):
+    """Заглушка для нективных кнопок"""
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("coll_filter_"))
+async def coll_filter_callback(callback: types.CallbackQuery):
+    """Фильтр коллекции по редкости"""
+    rarity = callback.data.replace("coll_filter_", "")
+    if rarity == "all":
+        rarity = None
+    await show_collection_page(callback, page=1, edit=True, rarity=rarity)
+    await callback.answer(f"Фильтр: {rarity or 'все'}")
 
 
 def is_private_chat(message: types.Message) -> bool:
@@ -278,6 +408,7 @@ async def cmd_help(message: types.Message):
 
         "🎴 <b>Коллекция:</b>\n"
         "/collection или /коллекция — мои карточки\n"
+        "/card ID или /карта ID — <b>показать карточку</b>\n"
         "/profile или /профиль — статистика\n\n"
 
         "💡 <b>Другое:</b>\n"
@@ -390,36 +521,418 @@ async def cmd_pull3(message: types.Message):
     await message.answer(text, parse_mode="HTML")
 
 
-@dp.message(Command("коллекция", "collection", "cards"))
-async def cmd_collection(message: types.Message):
-    db = get_session()
-    try:
-        gacha = GachaService(db)
-        result = gacha.get_collection(message.from_user.id, page=1, per_page=15)
-    finally:
-        db.close()
+@dp.message(Command("card", "карта", "карточка"))
+async def cmd_card(message: types.Message, command: CommandObject = None):
+    """Показать подробную информацию о карточке по ID"""
 
-    if not result["cards"]:
+    # Получаем аргументы команды
+    if not command or not command.args:
         await message.answer(
-            "🎴 <b>Коллекция пуста!</b>\n\n"
-            "Начни крутить: /pull",
+            "🎴 <b>Просмотр карточки</b>\n\n"
+            "Использование: <code>/card ID</code>\n"
+            "Пример: <code>/card 5</code>\n\n"
+            "ID карточки можно узнать в коллекции.",
             parse_mode="HTML",
         )
         return
 
-    text = f"🎴 <b>Твоя коллекция</b> — {result['completion']}%\n"
-    text += f"📊 {result['total_collected']}/{result['total_characters']}\n\n"
+    # Парсим ID
+    try:
+        card_id = int(command.args.strip())
+    except ValueError:
+        await message.answer("❌ ID должен быть числом. Пример: <code>/card 5</code>", parse_mode="HTML")
+        return
 
-    for card in result["cards"]:
-        info = card["rarity_info"]
-        stars = "⭐" * info["stars"]
-        fav = "❤️ " if card["is_favorite"] else ""
-        text += f"{fav}{info['emoji']} <b>{card['name']}</b> x{card['count']} {stars}\n"
+    # Получаем данные из БД
+    db = get_session()
+    try:
+        from database import Character, User, UserCard
 
+        char = db.query(Character).get(card_id)
+        if not char:
+            await message.answer(f"❌ Карточка #{card_id} не найдена")
+            return
+
+        # У текущего пользователя
+        user_card = db.query(UserCard).filter(
+            UserCard.user_id == message.from_user.id,
+            UserCard.character_id == card_id,
+        ).first()
+
+        # Статистика
+        total_users = db.query(User).count()
+        owners_count = db.query(UserCard).filter(
+            UserCard.character_id == card_id,
+        ).distinct(UserCard.user_id).count()
+
+        percentage = round((owners_count / total_users * 100), 2) if total_users > 0 else 0
+
+    finally:
+        db.close()
+
+    # Формируем текст
+    info = char.rarity_info
+    stars = "⭐" * info["stars"]
+
+    text = (
+        f"🎴 <b>Информация о персонаже</b>\n\n"
+        f"🆔 <b>ID:</b> <code>{char.id}</code>\n"
+        f"👤 <b>Имя:</b> {char.display_name}"
+    )
+
+    if char.name_en and char.name_en != char.display_name:
+        text += f" (<i>{char.name_en}</i>)"
+
+    text += f"\n📺 <b>Тайтл:</b> {char.anime_title}\n"
+    text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
+    text += f"⚔️ <b>Статы:</b> ATK {char.power} | DEF {char.defense} | SPD {char.speed}\n"
+
+    if char.description:
+        text += f"\n📖 <i>{char.description}</i>\n"
+
+    text += "\n━━━━━━━━━━━━━━━━━━\n\n"
+
+    # У вас
+    if user_card:
+        fav = " ⭐" if user_card.is_favorite else ""
+        text += f"✅ <b>Есть у вас:</b> {user_card.count} шт.{fav}\n"
+    else:
+        text += f"❌ <b>У вас нет этой карточки</b>\n"
+
+    text += f"🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)\n"
+
+    # Кнопки
     kb = InlineKeyboardBuilder()
-    add_game_button(kb, is_private_chat(message), text="🎴 Открыть в приложении")
 
-    await message.answer(text, reply_markup=kb.as_markup(), parse_mode="HTML")
+    # В ЛС — кнопка открыть в приложении
+    if is_private_chat(message):
+        add_game_button(kb, True, text="🎴 Открыть в приложении")
+
+    # Отправка с картинкой если есть
+    if char.image_url and char.image_url.startswith(("http://", "https://")):
+        try:
+            await message.answer_photo(
+                photo=char.image_url,
+                caption=text,
+                reply_markup=kb.as_markup() if kb.buttons else None,
+                parse_mode="HTML",
+            )
+            return
+        except Exception as e:
+            # Если картинка не загрузилась — отправляем без неё
+            print(f"⚠️ Не удалось отправить картинку: {e}")
+
+    # Без картинки
+    await message.answer(
+        text,
+        reply_markup=kb.as_markup() if kb.buttons else None,
+        parse_mode="HTML",
+    )
+
+
+@dp.message(Command("коллекция", "collection", "cards"))
+async def cmd_collection(message: types.Message):
+    """Показать коллекцию с группировкой"""
+    await show_collection_page(message, page=1)
+
+
+# bot.py
+
+async def show_collection_page(
+    message_or_callback,
+    page: int = 1,
+    edit: bool = False,
+    rarity_filter: str = None,
+    sort_by: str = "rarity_desc",  # rarity_desc, rarity_asc, name, anime, count
+):
+    """
+    Универсальная функция показа страницы коллекции.
+
+    Параметры:
+    - page: номер страницы
+    - edit: редактировать текущее сообщение или отправить новое
+    - rarity_filter: фильтр по редкости (common/rare/legendary/... или None = все)
+    - sort_by: сортировка
+    """
+
+    # Получаем user_id
+    if isinstance(message_or_callback, types.CallbackQuery):
+        user_id = message_or_callback.from_user.id
+        user_name = message_or_callback.from_user.first_name or "Игрок"
+        chat_type = message_or_callback.message.chat.type
+    else:
+        user_id = message_or_callback.from_user.id
+        user_name = message_or_callback.from_user.first_name or "Игрок"
+        chat_type = message_or_callback.chat.type
+
+    is_pv = chat_type == "private"
+
+    # Получаем коллекцию
+    db = get_session()
+    try:
+        from database import Character, UserCard, User, Anime, RARITY_INFO
+
+        # Базовый запрос
+        query = db.query(UserCard).join(Character).filter(
+            UserCard.user_id == user_id,
+        )
+
+        # Фильтр по редкости
+        if rarity_filter and rarity_filter != "all":
+            query = query.filter(Character.rarity == rarity_filter)
+
+        # Сортировка
+        if sort_by == "rarity_desc":
+            # От более редкого к менее (secret → common)
+            # SQL CASE для правильной сортировки по редкости
+            from sqlalchemy import case
+            rarity_order = case(
+                {r: info["order"] for r, info in RARITY_INFO.items()},
+                value=Character.rarity,
+                else_=0,
+            )
+            query = query.order_by(rarity_order.desc(), Character.anime_id, Character.name_en)
+        elif sort_by == "rarity_asc":
+            from sqlalchemy import case
+            rarity_order = case(
+                {r: info["order"] for r, info in RARITY_INFO.items()},
+                value=Character.rarity,
+                else_=0,
+            )
+            query = query.order_by(rarity_order.asc(), Character.anime_id, Character.name_en)
+        elif sort_by == "name":
+            query = query.order_by(Character.name_en)
+        elif sort_by == "anime":
+            query = query.order_by(Character.anime_id, Character.rarity.desc())
+        elif sort_by == "count":
+            query = query.order_by(UserCard.count.desc(), Character.rarity.desc())
+        else:
+            query = query.order_by(Character.name_en)
+
+        # Считаем всего с учётом фильтра
+        total_filtered = query.count()
+        per_page = 15
+        total_pages = max(1, (total_filtered + per_page - 1) // per_page)
+
+        # Ограничиваем страницу в допустимых пределах
+        page = max(1, min(page, total_pages))
+
+        # Получаем страницу
+        cards = query.offset((page - 1) * per_page).limit(per_page).all()
+
+        # Общая статистика (без фильтра)
+        total_chars = db.query(Character).filter(Character.is_active == True).count()
+        all_user_cards = db.query(UserCard).filter(UserCard.user_id == user_id).count()
+        total_animes = db.query(Anime).count()
+        user_animes = db.query(Character.anime_id).join(UserCard).filter(
+            UserCard.user_id == user_id,
+        ).distinct().count()
+
+    finally:
+        db.close()
+
+    # ============ ПРОВЕРКА ПУСТОЙ ============
+    if not cards:
+        if rarity_filter and rarity_filter != "all":
+            filter_name = RARITY_INFO.get(rarity_filter, {}).get("name", rarity_filter)
+            text = f"🎴 <b>Нет карточек редкости «{filter_name}»</b>\n\nПопробуй убрать фильтр."
+        else:
+            text = "🎴 <b>Коллекция пуста!</b>\n\nНачни крутить: /pull"
+
+        kb = InlineKeyboardBuilder()
+        if rarity_filter and rarity_filter != "all":
+            kb.row(InlineKeyboardButton(
+                text="🔄 Показать все",
+                callback_data="coll_filter_all_1",
+            ))
+
+        if edit and isinstance(message_or_callback, types.CallbackQuery):
+            try:
+                await message_or_callback.message.edit_text(
+                    text,
+                    reply_markup=kb.as_markup() if kb.buttons else None,
+                    parse_mode="HTML",
+                )
+            except:
+                pass
+        else:
+            answer_method = message_or_callback.answer if hasattr(message_or_callback, 'answer') else message_or_callback.message.answer
+            await answer_method(text, reply_markup=kb.as_markup() if kb.buttons else None, parse_mode="HTML")
+        return
+
+    # ============ ФОРМИРУЕМ ТЕКСТ ============
+    text = f"🎴 <b>{user_name}, ваша коллекция</b> "
+    text += f"<i>(стр. {page}/{total_pages})</i>\n"
+
+    # Показать активные фильтры
+    filter_info = []
+    if rarity_filter and rarity_filter != "all":
+        info = RARITY_INFO.get(rarity_filter, {})
+        filter_info.append(f"{info.get('emoji', '')} {info.get('name', rarity_filter)}")
+
+    sort_names = {
+        "rarity_desc": "по редкости ↓",
+        "rarity_asc": "по редкости ↑",
+        "name": "по имени",
+        "anime": "по аниме",
+        "count": "по количеству",
+    }
+    filter_info.append(sort_names.get(sort_by, "по имени"))
+
+    text += f"⚙️ <i>Фильтр: {' • '.join(filter_info)}</i>\n\n"
+
+    # Группируем по аниме (если не сортировка по редкости)
+    if sort_by in ("anime", "rarity_desc", "rarity_asc"):
+        # Простой список без группировки (так лучше видно редкость)
+        for card in cards:
+            info = card.character.rarity_info
+            fav = "⭐ " if card.is_favorite else ""
+            count_badge = f" ×{card.count}" if card.count > 1 else ""
+
+            text += (
+                f"{info['emoji']} <b>{card.character.display_name}</b>{count_badge} "
+                f"{fav}| id: <code>{card.character.id}</code>\n"
+            )
+    else:
+        # Группировка по аниме
+        grouped = {}
+        for card in cards:
+            anime = card.character.anime_title
+            if anime not in grouped:
+                grouped[anime] = []
+            grouped[anime].append(card)
+
+        for anime_name, anime_cards in grouped.items():
+            text += f"🌸 <b>{anime_name}:</b>\n"
+            for card in anime_cards:
+                info = card.character.rarity_info
+                fav = "⭐ " if card.is_favorite else ""
+                count_badge = f" ×{card.count}" if card.count > 1 else ""
+
+                text += (
+                    f"  {info['emoji']} <b>{card.character.display_name}</b>{count_badge} "
+                    f"{fav}| id: <code>{card.character.id}</code>\n"
+                )
+            text += "\n"
+
+    # Статистика внизу
+    percent = round(all_user_cards / max(total_chars, 1) * 100, 1)
+    anime_percent = round(user_animes / max(total_animes, 1) * 100, 1)
+
+    text += "━━━━━━━━━━━━━━━━━━\n"
+    text += f"📊 Найдено <b>{all_user_cards}</b> из {total_chars} ({percent}%)\n"
+    text += f"📺 Тайтлов: <b>{user_animes}</b> из {total_animes} ({anime_percent}%)"
+
+    if rarity_filter and rarity_filter != "all":
+        text += f"\n🔍 По фильтру: <b>{total_filtered}</b>"
+
+    # ============ КНОПКИ ============
+    kb = InlineKeyboardBuilder()
+
+    # 1) Кнопки быстрого просмотра карточек (🔍 ID) — по 4 в ряд
+    card_buttons = []
+    for card in cards:
+        card_buttons.append(InlineKeyboardButton(
+            text=f"🔍 {card.character.id}",
+            callback_data=f"view_card_{card.character.id}",
+        ))
+
+    for i in range(0, len(card_buttons), 4):
+        kb.row(*card_buttons[i:i+4])
+
+    # 2) Пагинация
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(
+            text="◀️",
+            callback_data=f"coll_filter_{rarity_filter or 'all'}_{page-1}",
+        ))
+    nav_row.append(InlineKeyboardButton(
+        text=f"{page}/{total_pages}",
+        callback_data="noop",
+    ))
+    if page < total_pages:
+        nav_row.append(InlineKeyboardButton(
+            text="▶️",
+            callback_data=f"coll_filter_{rarity_filter or 'all'}_{page+1}",
+        ))
+    kb.row(*nav_row)
+
+    # 3) Фильтры по редкости (2 ряда)
+    current_filter = rarity_filter or "all"
+
+    # Первый ряд — базовые
+    row1 = [
+        InlineKeyboardButton(
+            text="🔄 Все" + (" ✓" if current_filter == "all" else ""),
+            callback_data="coll_filter_all_1",
+        ),
+    ]
+
+    # Кнопки по редкости — упорядочены от секретной к обычной
+    rarity_order = ["secret", "mythical", "legendary", "epic", "rare", "uncommon", "common", "unique"]
+
+    filter_buttons = []
+    for rarity_key in rarity_order:
+        if rarity_key not in RARITY_INFO:
+            continue
+        info = RARITY_INFO[rarity_key]
+        active = " ✓" if current_filter == rarity_key else ""
+        filter_buttons.append(InlineKeyboardButton(
+            text=f"{info['emoji']}{active}",
+            callback_data=f"coll_filter_{rarity_key}_1",
+        ))
+
+    # Добавляем "Все" + первые 4 редкости в первый ряд
+    kb.row(*(row1 + filter_buttons[:4]))
+    # Остальные во второй ряд
+    if len(filter_buttons) > 4:
+        kb.row(*filter_buttons[4:8])
+
+    # 4) Сортировка
+    sort_current = sort_by
+    sort_options = [
+        ("rarity_desc", "💎↓"),
+        ("rarity_asc", "💎↑"),
+        ("name", "🔤"),
+        ("anime", "📺"),
+        ("count", "🔢"),
+    ]
+
+    sort_buttons = []
+    for sort_key, sort_emoji in sort_options:
+        active = " ✓" if sort_current == sort_key else ""
+        sort_buttons.append(InlineKeyboardButton(
+            text=f"{sort_emoji}{active}",
+            callback_data=f"coll_sort_{sort_key}_{rarity_filter or 'all'}_{page}",
+        ))
+    kb.row(*sort_buttons)
+
+    # 5) Открыть в приложении (только ЛС)
+    if is_pv:
+        add_game_button(kb, True, text="🎴 Открыть в приложении")
+
+    # ============ ОТПРАВКА ============
+    reply_markup = kb.as_markup() if kb.buttons else None
+
+    if edit and isinstance(message_or_callback, types.CallbackQuery):
+        try:
+            await message_or_callback.message.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+        except Exception as e:
+            # Если не удалось отредактировать — просто ответить
+            print(f"⚠️ Edit failed: {e}")
+            await message_or_callback.answer("Обновлено")
+    else:
+        answer_method = message_or_callback.answer if hasattr(message_or_callback, 'answer') else message_or_callback.message.answer
+        await answer_method(
+            text,
+            reply_markup=reply_markup,
+            parse_mode="HTML",
+        )
 
 
 @dp.message(Command("профиль", "profile", "balance", "me"))
@@ -602,6 +1115,7 @@ async def on_startup(bot: Bot):
         BotCommand(command="pull",       description="🎰 Крутка x1 (300💰)"),
         BotCommand(command="pull3",      description="🎰 Крутка x3 (810💰)"),
         BotCommand(command="collection", description="🎴 Моя коллекция"),
+        BotCommand(command="card",       description="🔍 Показать карточку по ID"),
         BotCommand(command="profile",    description="💼 Мой профиль"),
         BotCommand(command="suggest",    description="💡 Предложить карточку"),
         BotCommand(command="help",       description="ℹ️ Список команд"),
