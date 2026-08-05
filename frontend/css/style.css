@@ -1121,3 +1121,250 @@ body {
     font-style: italic;
     border-left: 2px solid var(--accent);
 }
+
+/* ==== CARD MODAL ==== */
+.card-modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.9);
+    z-index: 300;
+    overflow-y: auto;
+    animation: modalFadeIn 0.3s ease;
+}
+
+.card-modal.hidden { display: none; }
+
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+.card-modal-close {
+    position: fixed;
+    top: 12px;
+    right: 12px;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.7);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: #fff;
+    font-size: 20px;
+    cursor: pointer;
+    z-index: 310;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(10px);
+}
+
+.card-modal-close:active {
+    transform: scale(0.9);
+}
+
+.card-modal-content {
+    max-width: 500px;
+    margin: 0 auto;
+    animation: modalSlideUp 0.4s ease-out;
+}
+
+@keyframes modalSlideUp {
+    from { transform: translateY(30px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+/* Картинка */
+.card-modal-image-wrap {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 1 / 1.2;
+    background: var(--bg2);
+    overflow: hidden;
+}
+
+.card-modal-image {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center top;
+}
+
+.card-modal-image-fade {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    background: linear-gradient(to bottom, transparent, var(--bg));
+    pointer-events: none;
+}
+
+/* Тело модалки */
+.card-modal-body {
+    background: var(--bg);
+    padding: 16px;
+    padding-bottom: 32px;
+    margin-top: -20px;
+    position: relative;
+    z-index: 2;
+}
+
+.card-info-header {
+    background: rgba(108, 92, 231, 0.15);
+    padding: 10px 12px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid rgba(108, 92, 231, 0.3);
+}
+
+.card-info-emoji {
+    font-size: 18px;
+}
+
+.card-info-title {
+    font-size: 13px;
+    color: var(--text2);
+    font-weight: 600;
+}
+
+/* Ряды информации */
+.card-info-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--bg2);
+    padding: 12px;
+    border-radius: 12px;
+}
+
+.card-info-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    font-size: 13px;
+}
+
+.card-info-row:last-child { border-bottom: none; }
+
+.ci-icon {
+    font-size: 14px;
+    flex-shrink: 0;
+    width: 20px;
+    text-align: center;
+}
+
+.ci-label {
+    color: var(--text2);
+    font-weight: 600;
+    min-width: 90px;
+    flex-shrink: 0;
+}
+
+.ci-value {
+    color: var(--text);
+    font-weight: 500;
+    flex: 1;
+    word-break: break-word;
+}
+
+/* Разделитель */
+.card-modal-divider {
+    border: none;
+    height: 1px;
+    background: rgba(255, 255, 255, 0.08);
+    margin: 16px 0;
+}
+
+/* Инфа о владении */
+.card-owner-info {
+    background: var(--bg2);
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.card-owner-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text2);
+}
+
+.co-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+}
+
+.co-value {
+    color: var(--text);
+    font-weight: 600;
+    margin-left: auto;
+}
+
+/* Кнопки действий */
+.card-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.card-action-btn {
+    padding: 12px 8px;
+    border: none;
+    border-radius: 10px;
+    background: var(--bg2);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.card-action-btn:active {
+    transform: scale(0.96);
+    background: var(--bg3);
+}
+
+.card-action-btn.active {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-color: transparent;
+    color: #fff;
+}
+
+.card-action-dust {
+    background: rgba(76, 175, 80, 0.15);
+    border-color: rgba(76, 175, 80, 0.3);
+    color: #81c784;
+}
+
+.card-action-count {
+    background: rgba(108, 92, 231, 0.15);
+    border-color: rgba(108, 92, 231, 0.3);
+    color: var(--accent2);
+}
+
+/* Rarity цвета для значения редкости */
+.rarity-name-common    { color: var(--common); }
+.rarity-name-uncommon  { color: var(--uncommon); }
+.rarity-name-rare      { color: var(--rare); }
+.rarity-name-epic      { color: var(--epic); }
+.rarity-name-legendary { color: var(--legendary); }
+.rarity-name-mythical  { color: var(--mythical); }
+.rarity-name-secret    { color: var(--secret); }
+.rarity-name-unique    { color: var(--unique); }

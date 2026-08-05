@@ -541,6 +541,292 @@ function clearSgImage() {
     document.getElementById('sg-image-hint').textContent = 'Формат: JPG, PNG, WEBP';
 }
 
+
+// ============================================
+// CARD MODAL
+// ============================================
+let CURRENT_CARD = null;
+
+async function openCardModal(characterId) {
+    haptic('light');
+
+    try {
+        const r = await fetch(`${API}/api/card/${USER_ID}/${characterId}`);
+        const data = await r.json();
+
+        CURRENT_CARD = data;
+
+        const char = data.character;
+        const user = data.user_card;
+        const stats = data.stats;
+        const info = char.rarity_info;
+
+        // Картинка
+        const img = document.getElementById('card-modal-image');
+        if (char.image_url) {
+            img.src = char.image_url;
+            img.onerror = () => {
+                img.parentElement.innerHTML = `
+                    <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--bg3);font-size:80px">
+                        ${info.emoji}
+                    </div>
+                    <div class="card-modal-image-fade"></div>
+                `;
+            };
+        } else {
+            img.parentElement.innerHTML = `
+                <div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;background:var(--bg3);font-size:80px">
+                    ${info.emoji}
+                </div>
+                <div class="card-modal-image-fade"></div>
+            `;
+        }
+
+        // Информация
+        document.getElementById('cm-emoji').textContent = info.emoji;
+        document.getElementById('cm-id').textContent = char.id;
+        document.getElementById('cm-name').textContent = char.name;
+
+        // Полное имя (EN / JP если есть)
+        const fullName = [char.name_ru || char.name_en, char.name_en, char.name_jp]
+            .filter((v, i, arr) => v && arr.indexOf(v) === i)  // убираем дубликаты
+            .join(' / ');
+        document.getElementById('cm-name').textContent = fullName;
+
+        document.getElementById('cm-anime').textContent = char.anime;
+
+        // Редкость с цветом
+        const rarityEl = document.getElementById('cm-rarity');
+        rarityEl.innerHTML = `<span class="rarity-name-${char.rarity}">${info.emoji} ${info.name}</span>`;
+
+        // Статы
+        document.getElementById('cm-stats').textContent =
+            `⚔️${char.power} 🛡${char.defense} 💨${char.speed}`;
+
+        // Описание
+        document.getElementById('cm-desc').textContent = char.description || '—';
+
+        // Владение
+        const ownedEl = document.getElementById('cm-owned');
+        if (user.owned) {
+            ownedEl.innerHTML = `✅ Да (${user.count} шт.)`;
+            ownedEl.style.color = 'var(--green)';
+        } else {
+            ownedEl.innerHTML = '❌ Нет';
+            ownedEl.style.color = 'var(--text2)';
+        }
+
+        // Статистика
+        document.getElementById('cm-owners').textContent = stats.owners_count;
+        document.getElementById('cm-percent').textContent = stats.percentage;
+
+        // Кнопка избранного
+        const favBtn = document.getElementById('cm-fav-btn');
+        const favText = document.getElementById('cm-fav-text');
+        if (user.is_favorite) {
+            favBtn.classList.add('active');
+            favText.textContent = 'Убрать';
+        } else {
+            favBtn.classList.remove('active');
+            favText.textContent = 'В избранное';
+        }
+        favBtn.style.display = user.owned ? 'flex' : 'none';
+
+        // Кнопка распыления
+        const dustBtn = document.getElementById('cm-dust-btn');
+        dustBtn.style.display = (user.owned && user.count > 1) ? 'flex' : 'none';
+
+        // Кол-во копий
+        document.getElementById('cm-count').textContent = `${user.count} шт.`;
+        document.getElementById('cm-count-btn').style.display = user.owned ? 'flex' : 'none';
+
+        // Показать модалку
+        document.getElementById('card-modal').classList.remove('hidden');
+
+    } catch (e) {
+        console.error(e);
+        toast('❌ Ошибка загрузки карточки');
+    }
+}
+
+
+function closeCardModal() {
+    document.getElementById('card-modal').classList.add('hidden');
+    CURRENT_CARD = null;
+    haptic('light');
+}
+
+
+async function toggleFavoriteBtn() {
+    if (!CURRENT_CARD) return;
+
+    try {
+        const r = await fetch(`${API}/api/favorite/${USER_ID}/${CURRENT_CARD.character.id}`, {
+            method: 'POST',
+        });
+        const d = await r.json();
+
+        // Обновляем UI
+        const favBtn = document.getElementById('cm-fav-btn');
+        const favText = document.getElementById('cm-fav-text');
+        if (d.is_favorite) {
+            favBtn.classList.add('active');
+            favText.textContent = 'Убрать';
+            toast('⭐ Карточка в избранном!');
+            haptic('success');
+        } else {
+            favBtn.classList.remove('active');
+            favText.textContent = 'В избранное';
+            toast('Убрано из избранного');
+            haptic('light');
+        }
+
+        // Обновляем данные локально
+        CURRENT_CARD.user_card.is_favorite = d.is_favorite;
+    } catch(e) {
+        console.error(e);
+        toast('❌ Ошибка');
+    }
+}
+
+
+async function dustCardBtn() {
+    if (!CURRENT_CARD || CURRENT_CARD.user_card.count <= 1) return;
+
+    if (!confirm(`Распылить 1 копию за монеты?`)) return;
+
+    try {
+        const r = await fetch(
+            `${API}/api/card/${USER_ID}/${CURRENT_CARD.character.id}/dust`,
+            { method: 'POST' }
+        );
+        const d = await r.json();
+
+        if (d.success) {
+            toast(`♻️ +${d.dusted}💰`);
+            haptic('success');
+
+            // Обновляем UI
+            state.coins = d.new_balance;
+            updateHeader();
+
+            CURRENT_CARD.user_card.count = d.new_count;
+            document.getElementById('cm-count').textContent = `${d.new_count} шт.`;
+
+            // Если осталась только 1 копия — прячем кнопку
+            if (d.new_count <= 1) {
+                document.getElementById('cm-dust-btn').style.display = 'none';
+            }
+        } else {
+            toast('❌ Не удалось');
+        }
+    } catch(e) {
+        console.error(e);
+        toast('❌ Ошибка');
+    }
+}
+
+
+function shareCard() {
+    if (!CURRENT_CARD) return;
+    const char = CURRENT_CARD.character;
+    const info = char.rarity_info;
+
+    const shareText =
+        `🎴 ${info.emoji} ${char.name}\n` +
+        `${info.name} (${info.stars}⭐)\n` +
+        `📺 ${char.anime}\n\n` +
+        `У меня в коллекции Anime Cards!`;
+
+    // Через Telegram Share
+    if (tg.openTelegramLink) {
+        const encodedText = encodeURIComponent(shareText);
+        tg.openTelegramLink(`https://t.me/share/url?url=${encodeURIComponent(WEBAPP_URL || '')}&text=${encodedText}`);
+    } else {
+        // Fallback — копировать в буфер
+        navigator.clipboard.writeText(shareText);
+        toast('📋 Скопировано в буфер');
+    }
+    haptic('success');
+}
+
+
+// ============================================
+// ОБНОВИТЬ loadCollection — добавь клик
+// ============================================
+// Найди функцию loadCollection и замени карточку в HTML на:
+
+async function loadCollection(rarity = '') {
+    try {
+        let url = `${API}/api/collection/${USER_ID}?per_page=50`;
+        if (rarity) url += `&rarity=${rarity}`;
+        const r = await fetch(url);
+        const d = await r.json();
+
+        document.getElementById('progress-fill').style.width = d.completion + '%';
+        document.getElementById('progress-text').textContent =
+            `${d.total_collected}/${d.total_characters} (${d.completion}%)`;
+
+        const grid = document.getElementById('collection-grid');
+        if (d.cards.length === 0) {
+            grid.innerHTML = '<p style="text-align:center;color:var(--text2);grid-column:1/-1;padding:40px">Пока пусто 😢</p>';
+            return;
+        }
+
+        grid.innerHTML = d.cards.map(card => `
+            <div class="grid-card r-${card.rarity}" onclick="openCardModal(${card.character_id})">
+                <div class="grid-card-img">
+                    ${card.image_url
+                        ? `<img src="${card.image_url}" onerror="this.parentElement.innerHTML='${card.rarity_info.emoji}'">`
+                        : card.rarity_info.emoji}
+                </div>
+                ${card.count > 1 ? `<span class="grid-card-count">x${card.count}</span>` : ''}
+                ${card.is_favorite ? '<span class="grid-card-fav">⭐</span>' : ''}
+                <div class="grid-card-info">
+                    <div class="grid-card-name">${card.name}</div>
+                    <div class="grid-card-sub">
+                        <span>${card.rarity_info.emoji} ${'⭐'.repeat(card.rarity_info.stars)}</span>
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    } catch(e) { console.error(e); }
+}
+
+
+// ============================================
+// АЛЬБОМ — тоже клик по карточкам
+// ============================================
+async function loadAlbum() {
+    try {
+        const [allR, collR] = await Promise.all([
+            fetch(`${API}/api/characters?per_page=200`),
+            fetch(`${API}/api/collection/${USER_ID}?per_page=999`),
+        ]);
+        const allD = await allR.json();
+        const collD = await collR.json();
+
+        const owned = new Set(collD.cards.map(c => c.character_id));
+
+        document.getElementById('album-grid').innerHTML = allD.characters.map(char => `
+            <div class="grid-card r-${char.rarity} ${owned.has(char.id) ? '' : 'not-owned'}"
+                 onclick="openCardModal(${char.id})">
+                <div class="grid-card-img" style="font-size:20px">
+                    ${owned.has(char.id) && char.image_url
+                        ? `<img src="${char.image_url}" onerror="this.parentElement.innerHTML='${char.rarity_info.emoji}'">`
+                        : char.rarity_info.emoji}
+                </div>
+                <div class="grid-card-info">
+                    <div class="grid-card-name" style="font-size:9px">
+                        ${owned.has(char.id) ? char.name : '???'}
+                    </div>
+                </div>
+            </div>
+        `).join('');
+    } catch(e) { console.error(e); }
+}
+
+
 // ============================================
 // START
 // ============================================

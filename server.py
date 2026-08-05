@@ -663,3 +663,100 @@ async def suggest_upload(telegram_id: int, file: UploadFile = File(...)):
         f.write(contents)
 
     return {"url": f"/uploads/suggestions/{filename}"}  
+
+@app.get("/api/card/{telegram_id}/{character_id}")
+async def api_card_details(telegram_id: int, character_id: int):
+    """Детальная информация о карточке пользователя"""
+    db = get_session()
+    try:
+        # Информация о персонаже
+        char = db.query(Character).get(character_id)
+        if not char:
+            raise HTTPException(404, "Character not found")
+
+        # Информация о карте пользователя
+        user_card = db.query(UserCard).filter(
+            UserCard.user_id == telegram_id,
+            UserCard.character_id == character_id,
+        ).first()
+
+        # Статистика — у скольких юзеров есть эта карта
+        total_users = db.query(User).count()
+        owners_count = db.query(UserCard).filter(
+            UserCard.character_id == character_id,
+        ).distinct(UserCard.user_id).count()
+
+        percentage = round((owners_count / total_users * 100), 2) if total_users > 0 else 0
+
+        return {
+            "character": {
+                "id": char.id,
+                "name": char.display_name,
+                "name_en": char.name_en,
+                "name_ru": char.name_ru,
+                "name_jp": char.name_jp,
+                "anime": char.anime_title,
+                "rarity": char.rarity,
+                "rarity_info": char.rarity_info,
+                "image_url": char.image_url,
+                "description": char.description,
+                "power": char.power,
+                "defense": char.defense,
+                "speed": char.speed,
+                "tags": char.tags,
+            },
+            "user_card": {
+                "owned": user_card is not None,
+                "count": user_card.count if user_card else 0,
+                "level": user_card.level if user_card else 1,
+                "is_favorite": user_card.is_favorite if user_card else False,
+                "obtained_at": user_card.obtained_at.isoformat() if user_card else None,
+            } if user_card else {
+                "owned": False,
+                "count": 0,
+                "level": 0,
+                "is_favorite": False,
+                "obtained_at": None,
+            },
+            "stats": {
+                "total_users": total_users,
+                "owners_count": owners_count,
+                "percentage": percentage,
+            }
+        }
+    finally:
+        db.close()
+
+
+# Распылить дубликат в монеты
+@app.post("/api/card/{telegram_id}/{character_id}/dust")
+async def api_dust_card(telegram_id: int, character_id: int):
+    """Распылить лишнюю копию карточки в монеты"""
+    db = get_session()
+    try:
+        user_card = db.query(UserCard).filter(
+            UserCard.user_id == telegram_id,
+            UserCard.character_id == character_id,
+        ).first()
+
+        if not user_card or user_card.count <= 1:
+            raise HTTPException(400, "Нельзя распылить последнюю копию")
+
+        char = db.query(Character).get(character_id)
+        from config import DUPLICATE_COINS
+        dust_reward = DUPLICATE_COINS.get(char.rarity, 5) * 2  # x2 за распыление
+
+        user = db.query(User).filter(User.telegram_id == telegram_id).first()
+        user.coins += dust_reward
+        user_card.count -= 1
+
+        db.commit()
+
+        return {
+            "success": True,
+            "dusted": dust_reward,
+            "new_count": user_card.count,
+            "new_balance": user.coins,
+        }
+    finally:
+        db.close()

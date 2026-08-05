@@ -6,7 +6,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Аниме Карточки</title>
     <script src="https://telegram.org/js/telegram-web-app.js"></script>
-    <link rel="stylesheet" href="/static/css/style.css?v=3">
+    <link rel="stylesheet" href="/static/css/style.css?v=4">
 </head>
 <body>
     <div id="app">
@@ -231,8 +231,104 @@
 
         <!-- TOAST -->
         <div id="toast" class="toast hidden"></div>
+
+        <!-- МОДАЛКА КАРТОЧКИ -->
+        <div id="card-modal" class="card-modal hidden">
+            <!-- Кнопка закрытия -->
+            <button class="card-modal-close" onclick="closeCardModal()">✕</button>
+
+            <div class="card-modal-content">
+                <!-- Картинка сверху -->
+                <div class="card-modal-image-wrap">
+                    <img id="card-modal-image" class="card-modal-image">
+                    <div class="card-modal-image-fade"></div>
+                </div>
+
+                <!-- Информация о персонаже -->
+                <div class="card-modal-body">
+                    <div class="card-info-header">
+                        <span class="card-info-emoji" id="cm-emoji">👤</span>
+                        <span class="card-info-title">информация о персонаже:</span>
+                    </div>
+
+                    <div class="card-info-rows">
+                        <div class="card-info-row">
+                            <span class="ci-icon">🆔</span>
+                            <span class="ci-label">ID</span>
+                            <span class="ci-value" id="cm-id">—</span>
+                        </div>
+
+                        <div class="card-info-row">
+                            <span class="ci-icon">👤</span>
+                            <span class="ci-label">Полное имя:</span>
+                            <span class="ci-value" id="cm-name">—</span>
+                        </div>
+
+                        <div class="card-info-row">
+                            <span class="ci-icon">📺</span>
+                            <span class="ci-label">Тайтл:</span>
+                            <span class="ci-value" id="cm-anime">—</span>
+                        </div>
+
+                        <div class="card-info-row">
+                            <span class="ci-icon">💎</span>
+                            <span class="ci-label">Редкость:</span>
+                            <span class="ci-value" id="cm-rarity">—</span>
+                        </div>
+
+                        <div class="card-info-row" id="cm-stats-row">
+                            <span class="ci-icon">⚔️</span>
+                            <span class="ci-label">Статы:</span>
+                            <span class="ci-value" id="cm-stats">—</span>
+                        </div>
+
+                        <div class="card-info-row">
+                            <span class="ci-icon">📖</span>
+                            <span class="ci-label">Описание:</span>
+                            <span class="ci-value" id="cm-desc">—</span>
+                        </div>
+                    </div>
+
+                    <hr class="card-modal-divider">
+
+                    <div class="card-owner-info">
+                        <div class="card-owner-row">
+                            <span class="co-icon">✅</span>
+                            <span>Есть у вас:</span>
+                            <span class="co-value" id="cm-owned">—</span>
+                        </div>
+                        <div class="card-owner-row">
+                            <span class="co-icon">🌍</span>
+                            <span>Есть у:</span>
+                            <span class="co-value">
+                                <span id="cm-owners">0</span> (<span id="cm-percent">0</span>%) игроков
+                            </span>
+                        </div>
+                    </div>
+
+                    <!-- Действия -->
+                    <div class="card-actions">
+                        <button class="card-action-btn" onclick="toggleFavoriteBtn()" id="cm-fav-btn">
+                            ⭐ <span id="cm-fav-text">В избранное</span>
+                        </button>
+                        <button class="card-action-btn card-action-dust" onclick="dustCardBtn()" id="cm-dust-btn">
+                            ♻️ Распылить
+                        </button>
+                    </div>
+
+                    <div class="card-actions">
+                        <button class="card-action-btn card-action-count" id="cm-count-btn">
+                            📚 <span id="cm-count">0/0</span> копий
+                        </button>
+                        <button class="card-action-btn" onclick="shareCard()">
+                            📤 Поделиться
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
-    <script src="/static/js/app.js?v=3"></script>
+    <script src="/static/js/app.js?v=4"></script>
 </body>
 </html>
