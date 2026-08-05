@@ -1132,26 +1132,96 @@ async def show_collection_page(
 
 @dp.message(Command("профиль", "profile", "balance", "me"))
 async def cmd_profile(message: types.Message):
-    """Профиль игрока"""
+    """Профиль игрока с избранной карточкой"""
+
     db = get_session()
     try:
         gacha = GachaService(db)
         info = gacha.get_user_info(message.from_user.id)
+
+        # Получаем избранную карточку
+        from database import UserCard, Character
+        from sqlalchemy.orm import joinedload
+
+        fav = db.query(UserCard).options(
+            joinedload(UserCard.character).joinedload(Character.anime)
+        ).filter(
+            UserCard.user_id == message.from_user.id,
+            UserCard.is_favorite == True,
+        ).first()
+
+        fav_data = None
+        if fav and fav.character:
+            fav_data = {
+                "id": fav.character.id,
+                "name": fav.character.display_name,
+                "anime": fav.character.anime_title,
+                "rarity": fav.character.rarity,
+                "rarity_info": fav.character.rarity_info,
+                "image_url": fav.character.image_url,
+                "count": fav.count,
+            }
     finally:
         db.close()
 
     name = message.from_user.first_name or "Игрок"
+    username = f"@{message.from_user.username}" if message.from_user.username else ""
 
-    text = (
-        f"💼 <b>Профиль {name}</b>\n\n"
-        f"💰 Монеты: <b>{info['coins']}</b>\n"
-        f"💎 Гемы: <b>{info['gems']}</b>\n"
-        f"🎴 Карточек: <b>{info['total_cards']}</b>\n"
-        f"🎰 Круток: <b>{info['total_pulls']}</b>\n"
-        f"🎯 Pity: <b>{info['pulls_since_pity']}/90</b>\n"
-    )
+    # Формируем текст
+    text = f"💼 <b>Профиль</b>\n\n"
+    text += f"👤 <b>{name}</b>"
+    if username:
+        text += f" {username}"
+    text += f"\n🆔 <code>{message.from_user.id}</code>\n\n"
 
-    await message.answer(text, parse_mode="HTML")
+    text += f"💰 Монеты: <b>{info['coins']:,}</b>\n".replace(",", " ")
+    text += f"🎴 Карточек: <b>{info['total_cards']}</b>\n"
+    text += f"🎰 Круток: <b>{info['total_pulls']}</b>\n"
+    text += f"🎯 Pity: <b>{info['pulls_since_pity']}/90</b>\n"
+
+    # Если есть избранная
+    if fav_data:
+        info_r = fav_data["rarity_info"]
+        stars = "⭐" * info_r["stars"]
+        text += f"\n━━━━━━━━━━━━━━━━━━\n"
+        text += f"⭐ <b>Избранная карточка:</b>\n"
+        text += f"{info_r['emoji']} <b>{fav_data['name']}</b> {stars}\n"
+        text += f"📺 {fav_data['anime']}"
+        if fav_data['count'] > 1:
+            text += f"\n📚 Копий: {fav_data['count']}"
+
+    # Кнопки
+    kb = InlineKeyboardBuilder()
+
+    if fav_data:
+        kb.row(InlineKeyboardButton(
+            text=f"🔍 Открыть карточку #{fav_data['id']}",
+            callback_data=f"view_card_{fav_data['id']}",
+        ))
+
+    if is_private_chat(message):
+        add_game_button(kb, True, text="🎴 Открыть в приложении")
+
+    # Отправка с картинкой избранной если есть
+    if fav_data and fav_data.get('image_url'):
+        await send_card_message(
+            target=message,
+            text=text,
+            image_url=fav_data['image_url'],
+            reply_markup=kb.as_markup() if kb.buttons else None,
+            edit=False,
+        )
+    else:
+        # Без картинки
+        if not fav_data:
+            text += "\n\n💡 Выбери избранную карточку в коллекции!\n"
+            text += "<i>Нажми ⭐ на любой карточке из /collection</i>"
+
+        await message.answer(
+            text,
+            reply_markup=kb.as_markup() if kb.buttons else None,
+            parse_mode="HTML",
+        )
 
 
 @dp.message(Command("предложка", "suggest"))
