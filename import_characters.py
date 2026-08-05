@@ -15,58 +15,88 @@ from database import get_session, Character, Anime, RARITY_INFO
 # ============================================
 # НАСТРОЙКИ
 # ============================================
-JIKAN_API = "https://api.jikan.moe/v4"
 
-# Папка для картинок
+JIKAN_API = "https://api.jikan.moe/v4"
 IMAGES_DIR = Path("frontend/uploads/cards")
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-# Задержка между запросами (Jikan лимит: 3 запроса/сек)
-DELAY = 1.0  # 1 сек — с запасом
+DELAY = 1.5  # с запасом
+MAX_RETRIES = 3
 
 # ============================================
 # ФУНКЦИИ
 # ============================================
 
+def api_get(url: str, params: dict = None):
+    """GET с retry"""
+    for attempt in range(MAX_RETRIES):
+        try:
+            r = requests.get(url, params=params, timeout=30)
+
+            if r.status_code == 200:
+                return r
+
+            if r.status_code == 429:
+                # Rate limit
+                wait = 10
+                print(f"    ⏸ Rate limit, жду {wait}сек...")
+                time.sleep(wait)
+                continue
+
+            if r.status_code == 404:
+                print(f"    ❌ Не найдено (404)")
+                return None
+
+            if r.status_code >= 500:
+                # Серверная ошибка (504, 502, 503)
+                wait = 5 * (attempt + 1)
+                print(f"    ⚠️ Ошибка сервера {r.status_code}, ретрай через {wait}сек... (попытка {attempt+1}/{MAX_RETRIES})")
+                time.sleep(wait)
+                continue
+
+            print(f"    ❌ Неожиданная ошибка {r.status_code}")
+            return None
+
+        except requests.exceptions.Timeout:
+            print(f"    ⏰ Таймаут (попытка {attempt+1}/{MAX_RETRIES})")
+            time.sleep(3)
+        except requests.exceptions.ConnectionError as e:
+            print(f"    🔌 Проблема с сетью: {e}")
+            time.sleep(5)
+        except Exception as e:
+            print(f"    ❌ Ошибка: {e}")
+            time.sleep(3)
+
+    print(f"    ❌ Не удалось после {MAX_RETRIES} попыток")
+    return None
+
 def search_anime(query: str, limit: int = 5):
-    """Поиск аниме на MAL"""
     print(f"\n🔍 Ищу '{query}'...")
-    r = requests.get(f"{JIKAN_API}/anime", params={
+    r = api_get(f"{JIKAN_API}/anime", params={
         "q": query,
         "limit": limit,
         "order_by": "popularity",
         "sort": "asc",
     })
     time.sleep(DELAY)
-
-    if r.status_code != 200:
-        print(f"❌ Ошибка {r.status_code}")
+    if not r:
         return []
-
     return r.json().get("data", [])
 
 
 def get_anime_characters(anime_id: int):
-    """Получить всех персонажей аниме"""
     print(f"📥 Загружаю персонажей аниме #{anime_id}...")
-    r = requests.get(f"{JIKAN_API}/anime/{anime_id}/characters")
+    r = api_get(f"{JIKAN_API}/anime/{anime_id}/characters")
     time.sleep(DELAY)
-
-    if r.status_code != 200:
-        print(f"❌ Ошибка {r.status_code}")
+    if not r:
         return []
-
     return r.json().get("data", [])
 
 
 def get_character_details(char_id: int):
-    """Детальная информация о персонаже (favorites, картинка hi-res)"""
-    r = requests.get(f"{JIKAN_API}/characters/{char_id}/full")
+    r = api_get(f"{JIKAN_API}/characters/{char_id}/full")
     time.sleep(DELAY)
-
-    if r.status_code != 200:
+    if not r:
         return None
-
     return r.json().get("data")
 
 
@@ -129,7 +159,6 @@ def calculate_stats(favorites: int, rarity: str) -> dict:
 
 
 def download_image(url: str, char_id: int) -> str:
-    """Скачивает картинку и возвращает URL для БД"""
     if not url:
         return None
 
@@ -138,20 +167,28 @@ def download_image(url: str, char_id: int) -> str:
         if ext not in ("jpg", "jpeg", "png", "webp"):
             ext = "jpg"
 
-        # Уникальное имя
         filename = f"mal_{char_id}_{uuid.uuid4().hex[:8]}.{ext}"
         filepath = IMAGES_DIR / filename
 
-        r = requests.get(url, timeout=15, stream=True)
-        r.raise_for_status()
+        for attempt in range(3):
+            try:
+                r = requests.get(url, timeout=30, stream=True)
+                r.raise_for_status()
 
-        with open(filepath, "wb") as f:
-            for chunk in r.iter_content(8192):
-                f.write(chunk)
+                with open(filepath, "wb") as f:
+                    for chunk in r.iter_content(8192):
+                        f.write(chunk)
 
-        return f"/uploads/cards/{filename}"
+                return f"/uploads/cards/{filename}"
+            except Exception as e:
+                if attempt < 2:
+                    print(f"    ⚠️ Ретрай картинки...")
+                    time.sleep(2)
+                else:
+                    print(f"    ⚠️ Не удалось скачать картинку: {e}")
+                    return None
     except Exception as e:
-        print(f"    ⚠️ Не удалось скачать картинку: {e}")
+        print(f"    ⚠️ Ошибка: {e}")
         return None
 
 
