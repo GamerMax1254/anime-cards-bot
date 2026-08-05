@@ -39,6 +39,7 @@ class Character(Base):
     name_en = Column(String(200), nullable=False)
     name_ru = Column(String(200), nullable=True)
     name_jp = Column(String(200), nullable=True, default="")
+    gender = Column(String(20), nullable=True)
     anime_id = Column(Integer, ForeignKey("anime.id"), nullable=True)
     rarity = Column(String(20), nullable=False, default="common")
     image_url = Column(String(500), nullable=True)
