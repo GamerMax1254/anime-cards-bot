@@ -40,20 +40,18 @@ async def coll_page_callback(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data.startswith("view_card_"))
 async def view_card_callback(callback: types.CallbackQuery):
-    """Показать детали карточки через inline-кнопку"""
+    """Показать детали карточки"""
     try:
         card_id = int(callback.data.split("_")[-1])
     except:
         await callback.answer("❌ Ошибка ID")
         return
 
-    # Загружаем данные и СРАЗУ конвертируем
     db = get_session()
     try:
         from database import Character, User, UserCard
         from sqlalchemy.orm import joinedload
 
-        # joinedload — грузим сразу вместе с anime
         char = db.query(Character).options(
             joinedload(Character.anime)
         ).filter(Character.id == card_id).first()
@@ -62,13 +60,12 @@ async def view_card_callback(callback: types.CallbackQuery):
             await callback.answer("❌ Карточка не найдена", show_alert=True)
             return
 
-        # ============ КОНВЕРТИРУЕМ В DICT ============
         char_data = {
             "id": char.id,
             "name": char.display_name,
             "name_en": char.name_en,
             "name_jp": char.name_jp,
-            "anime_title": char.anime_title,  # обращаемся ВНУТРИ сессии
+            "anime_title": char.anime_title,
             "rarity": char.rarity,
             "rarity_info": char.rarity_info,
             "image_url": char.image_url,
@@ -78,7 +75,6 @@ async def view_card_callback(callback: types.CallbackQuery):
             "speed": char.speed,
         }
 
-        # Карта пользователя
         user_card = db.query(UserCard).filter(
             UserCard.user_id == callback.from_user.id,
             UserCard.character_id == card_id,
@@ -92,7 +88,6 @@ async def view_card_callback(callback: types.CallbackQuery):
                 "level": user_card.level,
             }
 
-        # Статистика
         total_users = db.query(User).count()
         owners_count = db.query(UserCard).filter(
             UserCard.character_id == card_id,
@@ -102,7 +97,7 @@ async def view_card_callback(callback: types.CallbackQuery):
     finally:
         db.close()
 
-    # ============ ФОРМИРУЕМ ТЕКСТ (используем ТОЛЬКО dict) ============
+    # Формируем текст
     info = char_data["rarity_info"]
     stars = "⭐" * info["stars"]
 
@@ -114,6 +109,9 @@ async def view_card_callback(callback: types.CallbackQuery):
 
     if char_data['name_en'] and char_data['name_en'] != char_data['name']:
         text += f" (<i>{char_data['name_en']}</i>)"
+
+    if char_data['name_jp']:
+        text += f"\n🇯🇵 <i>{char_data['name_jp']}</i>"
 
     text += f"\n📺 <b>Тайтл:</b> {char_data['anime_title']}\n"
     text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
@@ -132,49 +130,83 @@ async def view_card_callback(callback: types.CallbackQuery):
 
     text += f"\n🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)"
 
-    # ============ КНОПКИ ============
+    # Кнопки
     kb = InlineKeyboardBuilder()
+
+    # Действия (только если есть карта)
+    if user_card_data:
+        action_row = []
+        if user_card_data["is_favorite"]:
+            action_row.append(InlineKeyboardButton(
+                text="⭐ Убрать из избранного",
+                callback_data=f"card_fav_{card_id}",
+            ))
+        else:
+            action_row.append(InlineKeyboardButton(
+                text="⭐ В избранное",
+                callback_data=f"card_fav_{card_id}",
+            ))
+        kb.row(*action_row)
+
     kb.row(InlineKeyboardButton(
-        text="⬅️ Назад к коллекции",
+        text="⬅️ К коллекции",
         callback_data="coll_filter_all_1",
     ))
 
     if callback.message.chat.type == "private":
         add_game_button(kb, True, text="🎴 Открыть в приложении")
 
-    # ============ ОТПРАВКА ============
-    try:
-        if char_data['image_url'] and char_data['image_url'].startswith(("http://", "https://")):
-            await callback.message.answer_photo(
-                photo=char_data['image_url'],
-                caption=text,
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML",
-            )
-        else:
-            # Пытаемся отредактировать — если было текстовое сообщение
-            try:
-                await callback.message.edit_text(
-                    text,
-                    reply_markup=kb.as_markup(),
-                    parse_mode="HTML",
-                )
-            except:
-                # Если не получилось (было с фото) — отправляем новое
-                await callback.message.answer(
-                    text,
-                    reply_markup=kb.as_markup(),
-                    parse_mode="HTML",
-                )
-    except Exception as e:
-        print(f"⚠️ Card send error: {e}")
-        await callback.message.answer(
-            text,
-            reply_markup=kb.as_markup(),
-            parse_mode="HTML",
-        )
+    # Отправка через хелпер
+    await send_card_message(
+        target=callback.message,
+        text=text,
+        image_url=char_data['image_url'],
+        reply_markup=kb.as_markup(),
+        edit=True,  # попробуем отредактировать/заменить
+    )
 
     await callback.answer()
+
+
+# Обработчик для избранного
+@dp.callback_query(F.data.startswith("card_fav_"))
+async def card_favorite_callback(callback: types.CallbackQuery):
+    """Переключить избранное"""
+    try:
+        card_id = int(callback.data.split("_")[-1])
+    except:
+        await callback.answer("❌ Ошибка ID")
+        return
+
+    db = get_session()
+    try:
+        from database import UserCard
+
+        # Убираем предыдущее избранное
+        db.query(UserCard).filter(
+            UserCard.user_id == callback.from_user.id,
+            UserCard.is_favorite == True,
+        ).update({"is_favorite": False})
+
+        # Ставим текущее
+        card = db.query(UserCard).filter(
+            UserCard.user_id == callback.from_user.id,
+            UserCard.character_id == card_id,
+        ).first()
+
+        if not card:
+            await callback.answer("❌ Карточки нет в коллекции", show_alert=True)
+            return
+
+        card.is_favorite = True
+        db.commit()
+
+        await callback.answer("⭐ Карточка в избранном!", show_alert=False)
+    finally:
+        db.close()
+
+    # Перезагружаем детали карточки
+    await view_card_callback(callback)
 
 
 @dp.callback_query(F.data == "noop")
@@ -263,6 +295,69 @@ async def cmd_start(message: types.Message):
         "🎰 Крути гачу и собирай!\n\n"
         + ("Выбери действие 👇" if is_private else "Нажми чтобы играть 👇"),
         reply_markup=kb.as_markup(),
+        parse_mode="HTML",
+    )
+
+
+async def send_card_message(
+    target,  # message или callback.message
+    text: str,
+    image_url: str = None,
+    reply_markup=None,
+    edit: bool = False,
+):
+    """
+    Универсальная отправка сообщения с карточкой.
+    Если есть картинка — с фото, иначе текстом.
+    """
+
+    # Формируем полный URL если это относительный путь
+    if image_url and image_url.startswith("/"):
+        if WEBAPP_URL and WEBAPP_URL.startswith("https"):
+            image_url = WEBAPP_URL.rstrip("/") + image_url
+        else:
+            image_url = None  # без публичного URL не отправим
+
+    # Если есть картинка — с фото
+    if image_url and image_url.startswith(("http://", "https://")):
+        try:
+            # При редактировании — сначала удалим старое сообщение
+            if edit:
+                try:
+                    await target.delete()
+                except:
+                    pass
+
+            await target.answer_photo(
+                photo=image_url,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            return
+        except Exception as e:
+            print(f"⚠️ Photo send error: {e}")
+            # Fallback → без картинки
+
+    # Без картинки
+    if edit:
+        try:
+            await target.edit_text(
+                text,
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            return
+        except:
+            # Не получилось редактировать (например, было фото) → удаляем и отправляем новое
+            try:
+                await target.delete()
+            except:
+                pass
+
+    await target.answer(
+        text,
+        reply_markup=reply_markup,
         parse_mode="HTML",
     )
 
@@ -503,7 +598,7 @@ async def cmd_pull(message: types.Message):
     new_mark = "🆕 <b>НОВАЯ!</b>" if card["is_new"] else "🔄 Дубликат"
 
     text = (
-        f"🎰 <b>Результат:</b>\n\n"
+        f"🎰 <b>Крутка:</b>\n\n"
         f"{card['emoji']} <b>{card['name']}</b>\n"
         f"{stars} {card['rarity_name']}\n"
         f"📺 {card['anime']}\n"
@@ -517,18 +612,23 @@ async def cmd_pull(message: types.Message):
     text += f"\n💰 Баланс: {result['coins']}"
 
     kb = InlineKeyboardBuilder()
-
-    # В ЛС — интерактивные кнопки для повтора
     if is_private_chat(message):
         kb.row(
             InlineKeyboardButton(text="🎰 Ещё x1", callback_data="pull1"),
             InlineKeyboardButton(text="🎰 x3", callback_data="pull10"),
         )
+    kb.row(InlineKeyboardButton(
+        text="🔍 Подробнее",
+        callback_data=f"view_card_{card['id']}",
+    ))
 
-    await message.answer(
-        text,
-        reply_markup=kb.as_markup() if kb.export() else None,
-        parse_mode="HTML",
+    # С картинкой если есть
+    await send_card_message(
+        target=message,
+        text=text,
+        image_url=card.get('image_url'),
+        reply_markup=kb.as_markup() if kb.buttons else None,
+        edit=False,
     )
 
 
@@ -576,10 +676,9 @@ async def cmd_card(message: types.Message, command: CommandObject = None):
     try:
         card_id = int(command.args.strip())
     except ValueError:
-        await message.answer("❌ ID должен быть числом. Пример: <code>/card 5</code>", parse_mode="HTML")
+        await message.answer("❌ ID должен быть числом.", parse_mode="HTML")
         return
 
-    # Загружаем и сразу конвертируем в dict
     db = get_session()
     try:
         from database import Character, User, UserCard
@@ -613,12 +712,10 @@ async def cmd_card(message: types.Message, command: CommandObject = None):
             UserCard.character_id == card_id,
         ).first()
 
-        user_card_data = None
-        if user_card:
-            user_card_data = {
-                "count": user_card.count,
-                "is_favorite": user_card.is_favorite,
-            }
+        user_card_data = {
+            "count": user_card.count,
+            "is_favorite": user_card.is_favorite,
+        } if user_card else None
 
         total_users = db.query(User).count()
         owners_count = db.query(UserCard).filter(
@@ -629,7 +726,6 @@ async def cmd_card(message: types.Message, command: CommandObject = None):
     finally:
         db.close()
 
-    # Формируем текст
     info = char_data['rarity_info']
     stars = "⭐" * info['stars']
 
@@ -641,6 +737,9 @@ async def cmd_card(message: types.Message, command: CommandObject = None):
 
     if char_data['name_en'] and char_data['name_en'] != char_data['name']:
         text += f" (<i>{char_data['name_en']}</i>)"
+
+    if char_data['name_jp']:
+        text += f"\n🇯🇵 <i>{char_data['name_jp']}</i>"
 
     text += f"\n📺 <b>Тайтл:</b> {char_data['anime_title']}\n"
     text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
@@ -660,27 +759,24 @@ async def cmd_card(message: types.Message, command: CommandObject = None):
     text += f"🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)\n"
 
     kb = InlineKeyboardBuilder()
+
+    if user_card_data:
+        fav_text = "⭐ Убрать" if user_card_data["is_favorite"] else "⭐ В избранное"
+        kb.row(InlineKeyboardButton(
+            text=fav_text,
+            callback_data=f"card_fav_{card_id}",
+        ))
+
     if is_private_chat(message):
         add_game_button(kb, True, text="🎴 Открыть в приложении")
 
-    # Отправка с картинкой если есть
-    if char_data['image_url'] and char_data['image_url'].startswith(("http://", "https://")):
-        try:
-            await message.answer_photo(
-                photo=char_data['image_url'],
-                caption=text,
-                reply_markup=kb.as_markup() if kb.buttons else None,
-                parse_mode="HTML",
-            )
-            return
-        except Exception as e:
-            print(f"⚠️ Photo send error: {e}")
-
-    # Без картинки
-    await message.answer(
-        text,
+    # Отправка через хелпер
+    await send_card_message(
+        target=message,
+        text=text,
+        image_url=char_data['image_url'],
         reply_markup=kb.as_markup() if kb.buttons else None,
-        parse_mode="HTML",
+        edit=False,  # новое сообщение
     )
 
 
