@@ -711,23 +711,68 @@ async function importLoadTop() {
 function renderImportResults(results) {
     const container = document.getElementById('import-results');
     if (!results || results.length === 0) {
-        container.innerHTML = '<p style="color:var(--text2);text-align:center;padding:20px">Ничего не найдено</p>';
+        container.innerHTML = '<p style="color:var(--text2);text-align:center;padding:20px;grid-column:1/-1">Ничего не найдено</p>';
         return;
     }
 
-    container.innerHTML = results.map(anime => `
-        <div class="import-anime-card ${SELECTED_ANIME.has(anime.id) ? 'selected' : ''}"
-             onclick="toggleAnimeSelect(${anime.id}, '${(anime.title_en || '').replace(/'/g, "\\'")}', '${anime.cover || ''}')">
-            <img src="${anime.cover || ''}" class="import-anime-cover" onerror="this.style.display='none'">
-            <div class="import-anime-info">
-                <div class="import-anime-title">${anime.title_en}</div>
-                <div class="import-anime-meta">
-                    <span>📅 ${anime.year || '?'}</span>
-                    <span>⭐ ${anime.score || '?'}</span>
+    container.innerHTML = results.map(anime => {
+        const isSelected = SELECTED_ANIME.has(anime.id);
+        const isImported = anime.already_imported;
+
+        // Форматы для отображения
+        const formatIcon = {
+            'TV': '📺',
+            'MOVIE': '🎬',
+            'OVA': '📀',
+            'ONA': '💻',
+            'SPECIAL': '⭐',
+            'MUSIC': '🎵',
+        }[anime.format] || '🎭';
+
+        // Цвет метки популярности
+        const charBadge = anime.char_count > 30 ? '🔥' :
+                          anime.char_count > 15 ? '👥' :
+                          anime.char_count > 5 ? '👤' : '';
+
+        // Данные для click (безопасное кодирование)
+        const dataAttr = encodeURIComponent(JSON.stringify({
+            id: anime.id,
+            title: anime.title_en,
+            cover: anime.cover,
+        }));
+
+        return `
+            <div class="import-anime-card ${isSelected ? 'selected' : ''} ${isImported ? 'imported' : ''}"
+                 onclick="toggleAnimeFromData('${dataAttr}')">
+                <div style="position:relative">
+                    <img src="${anime.cover || ''}" class="import-anime-cover"
+                         onerror="this.style.background='var(--bg3)';this.src=''">
+                    ${isImported ? '<div class="imported-badge">✓ В БД</div>' : ''}
+                    ${charBadge ? `<div class="char-count-badge">${charBadge} ${anime.char_count}</div>` : ''}
+                </div>
+                <div class="import-anime-info">
+                    <div class="import-anime-title" title="${anime.title_en}">
+                        ${anime.title_en}
+                    </div>
+                    <div class="import-anime-meta">
+                        <span>${formatIcon} ${anime.year || '?'}</span>
+                        <span>⭐ ${anime.score || '?'}</span>
+                    </div>
+                    ${anime.episodes ? `<div style="font-size:10px;color:var(--text2);margin-top:2px">🎬 ${anime.episodes} эп.</div>` : ''}
                 </div>
             </div>
-        </div>
-    `).join('');
+        `;
+    }).join('');
+}
+
+
+function toggleAnimeFromData(dataAttr) {
+    try {
+        const data = JSON.parse(decodeURIComponent(dataAttr));
+        toggleAnimeSelect(data.id, data.title, data.cover);
+    } catch(e) {
+        console.error('Parse error:', e);
+    }
 }
 
 

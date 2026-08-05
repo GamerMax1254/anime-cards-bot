@@ -880,9 +880,7 @@ def background_import(anime_ids: list, chars_limit: int, filter_gender: str, dow
 
 
 def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gender):
-    """
-    Копия import_anime но с логами через add_log.
-    """
+    """Импорт с логами и умной проверкой дубликатов."""
     from import_anilist import (
         get_anime_with_characters,
         determine_rarity,
@@ -899,10 +897,16 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
         title = anime_data["title"]
         title_en = title.get("english") or title["romaji"]
 
-        # Аниме
-        existing = db.query(Anime).filter(Anime.title_en == title_en).first()
+        # ============ АНИМЕ (с умной проверкой) ============
+        # Ищем по любой форме названия (english или romaji)
+        romaji = title.get("romaji", "")
+
+        existing = db.query(Anime).filter(
+            (Anime.title_en == title_en) | (Anime.title_en == romaji)
+        ).first()
+
         if existing:
-            add_log(f"✅ Аниме '{title_en}' уже есть")
+            add_log(f"✅ Аниме '{title_en}' уже есть в БД (#{existing.id})")
             anime = existing
         else:
             anime = Anime(
@@ -911,9 +915,9 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
             )
             db.add(anime)
             db.commit()
-            add_log(f"✅ Добавлено: {title_en}")
+            add_log(f"✅ Добавлено аниме: {title_en}")
 
-        # Персонажи
+        # ============ ПЕРСОНАЖИ ============
         full = get_anime_with_characters(anime_data["id"], chars_limit=chars_limit + 10)
         if not full:
             add_log("❌ Не удалось загрузить персонажей")
@@ -926,25 +930,49 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
 
         edges = edges[:chars_limit]
 
-        add_log(f"📊 Импортирую {len(edges)} персонажей...")
+        add_log(f"📊 Проверяю {len(edges)} персонажей...")
 
         added = 0
+        skipped_duplicate = 0
+
         for i, edge in enumerate(edges, 1):
             char = edge["node"]
             role = edge["role"]
             name_en = char["name"]["full"]
+            name_jp = char["name"].get("native", "")
             gender = normalize_gender(char.get("gender"))
             favourites = char.get("favourites", 0)
 
-            existing_char = db.query(Character).filter(
-                Character.name_en == name_en,
-                Character.anime_id == anime.id,
+            # ============ УМНАЯ ПРОВЕРКА ДУБЛИКАТОВ ============
+            # Проверяем по 3 признакам:
+            # 1. Точное совпадение имени EN
+            # 2. Совпадение имени JP (если есть)
+            # 3. AniList character ID (если сохранён)
+
+            duplicate = None
+
+            # По имени EN (в любом аниме, не только текущем)
+            duplicate = db.query(Character).filter(
+                Character.name_en == name_en
             ).first()
 
-            if existing_char:
-                add_log(f"  ⏭ [{i}/{len(edges)}] {name_en} — уже есть")
+            # По японскому имени
+            if not duplicate and name_jp:
+                duplicate = db.query(Character).filter(
+                    Character.name_jp == name_jp,
+                    Character.name_jp != "",
+                ).first()
+
+            if duplicate:
+                # Персонаж уже есть — можно ПРИВЯЗАТЬ его к текущему аниме если он в другом
+                if duplicate.anime_id != anime.id:
+                    add_log(f"  🔗 [{i}/{len(edges)}] {name_en} уже есть в '{duplicate.anime.title_en if duplicate.anime else '?'}', оставляем там")
+                else:
+                    add_log(f"  ⏭ [{i}/{len(edges)}] {name_en} уже в этом аниме")
+                skipped_duplicate += 1
                 continue
 
+            # ============ СОЗДАЁМ НОВОГО ============
             rarity = determine_rarity(favourites, role)
             stats = calculate_stats(favourites, rarity)
 
@@ -956,7 +984,7 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
 
             new_char_data = {
                 "name_en": name_en,
-                "name_jp": char["name"].get("native", ""),
+                "name_jp": name_jp,
                 "anime_id": anime.id,
                 "rarity": rarity,
                 "image_url": image_url,
@@ -979,10 +1007,13 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
 
             info = RARITY_INFO[rarity]
             g_icon = {"male": "♂", "female": "♀"}.get(gender, "")
-            img_ok = "🖼" if image_url else ""
+            img_ok = "🖼" if image_url else "  "
             add_log(f"  ✅ [{i}/{len(edges)}] {info['emoji']} {name_en} {g_icon} {img_ok}")
 
             added += 1
+
+        if skipped_duplicate:
+            add_log(f"\n📊 Пропущено дубликатов: {skipped_duplicate}")
 
         return added
 
@@ -996,23 +1027,87 @@ def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gend
 
 @app.post("/api/admin/import/search")
 async def admin_import_search(data: dict, _: bool = Depends(verify_admin)):
-    """Поиск аниме на AniList"""
+    """Поиск аниме с приоритетом основных сериалов"""
     query = data.get("query", "").strip()
     if not query:
         return []
 
     try:
-        results = anilist_search(query, limit=10)
-        return [{
-            "id": a["id"],
-            "title_en": a["title"].get("english") or a["title"]["romaji"],
-            "title_native": a["title"].get("native"),
-            "year": a.get("startDate", {}).get("year"),
-            "score": a.get("averageScore"),
-            "popularity": a.get("popularity"),
-            "cover": a.get("coverImage", {}).get("large"),
-            "genres": a.get("genres", []),
-        } for a in results]
+        # Расширенный GraphQL запрос — с кол-вом персонажей
+        gql = """
+        query ($search: String, $perPage: Int) {
+          Page(perPage: $perPage) {
+            media(search: $search, type: ANIME, sort: [POPULARITY_DESC]) {
+              id
+              title {
+                romaji
+                english
+                native
+              }
+              format
+              status
+              startDate { year }
+              episodes
+              averageScore
+              popularity
+              favourites
+              coverImage {
+                large
+              }
+              genres
+              characters(perPage: 1) {
+                pageInfo {
+                  total
+                }
+              }
+            }
+          }
+        }
+        """
+
+        data_response = anilist_query(gql, {"search": query, "perPage": 15})
+        if not data_response:
+            return []
+
+        results = data_response["Page"]["media"]
+
+        # Проверяем какие уже в нашей БД
+        db = get_session()
+        try:
+            existing_titles = set()
+            all_animes = db.query(Anime).all()
+            for a in all_animes:
+                if a.title_en:
+                    existing_titles.add(a.title_en.lower())
+        finally:
+            db.close()
+
+        formatted = []
+        for a in results:
+            title_en = a["title"].get("english") or a["title"]["romaji"]
+            char_count = a.get("characters", {}).get("pageInfo", {}).get("total", 0)
+
+            formatted.append({
+                "id": a["id"],
+                "title_en": title_en,
+                "title_native": a["title"].get("native"),
+                "year": a.get("startDate", {}).get("year"),
+                "score": a.get("averageScore"),
+                "popularity": a.get("popularity"),
+                "favourites": a.get("favourites"),
+                "episodes": a.get("episodes"),
+                "format": a.get("format"),
+                "cover": a.get("coverImage", {}).get("large"),
+                "genres": a.get("genres", []),
+                "char_count": char_count,
+                "already_imported": title_en.lower() in existing_titles,
+            })
+
+        # Сортировка: сначала по кол-ву персонажей, потом по популярности
+        formatted.sort(key=lambda x: (-(x.get("char_count") or 0), -(x.get("popularity") or 0)))
+
+        return formatted
+
     except Exception as e:
         raise HTTPException(500, f"Ошибка поиска: {e}")
 
