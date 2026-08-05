@@ -636,24 +636,18 @@ async def cmd_collection(message: types.Message):
     await show_collection_page(message, page=1)
 
 
-# bot.py
-
 async def show_collection_page(
     message_or_callback,
     page: int = 1,
     edit: bool = False,
     rarity_filter: str = None,
-    sort_by: str = "rarity_desc",  # rarity_desc, rarity_asc, name, anime, count
+    sort_by: str = "rarity_desc",
 ):
     """
     Универсальная функция показа страницы коллекции.
-
-    Параметры:
-    - page: номер страницы
-    - edit: редактировать текущее сообщение или отправить новое
-    - rarity_filter: фильтр по редкости (common/rare/legendary/... или None = все)
-    - sort_by: сортировка
     """
+    from sqlalchemy.orm import joinedload
+    from sqlalchemy import case
 
     # Получаем user_id
     if isinstance(message_or_callback, types.CallbackQuery):
@@ -667,15 +661,15 @@ async def show_collection_page(
 
     is_pv = chat_type == "private"
 
-    # Получаем коллекцию
+    # Получаем данные и СРАЗУ конвертируем в dict внутри сессии
     db = get_session()
     try:
         from database import Character, UserCard, User, Anime, RARITY_INFO
 
-        # Базовый запрос
-        query = db.query(UserCard).join(Character).filter(
-            UserCard.user_id == user_id,
-        )
+        # joinedload — загружаем character сразу вместе с UserCard
+        query = db.query(UserCard).join(Character).options(
+            joinedload(UserCard.character).joinedload(Character.anime)
+        ).filter(UserCard.user_id == user_id)
 
         # Фильтр по редкости
         if rarity_filter and rarity_filter != "all":
@@ -683,9 +677,6 @@ async def show_collection_page(
 
         # Сортировка
         if sort_by == "rarity_desc":
-            # От более редкого к менее (secret → common)
-            # SQL CASE для правильной сортировки по редкости
-            from sqlalchemy import case
             rarity_order = case(
                 {r: info["order"] for r, info in RARITY_INFO.items()},
                 value=Character.rarity,
@@ -693,7 +684,6 @@ async def show_collection_page(
             )
             query = query.order_by(rarity_order.desc(), Character.anime_id, Character.name_en)
         elif sort_by == "rarity_asc":
-            from sqlalchemy import case
             rarity_order = case(
                 {r: info["order"] for r, info in RARITY_INFO.items()},
                 value=Character.rarity,
@@ -709,18 +699,30 @@ async def show_collection_page(
         else:
             query = query.order_by(Character.name_en)
 
-        # Считаем всего с учётом фильтра
+        # Счётчики
         total_filtered = query.count()
         per_page = 15
         total_pages = max(1, (total_filtered + per_page - 1) // per_page)
-
-        # Ограничиваем страницу в допустимых пределах
         page = max(1, min(page, total_pages))
 
         # Получаем страницу
-        cards = query.offset((page - 1) * per_page).limit(per_page).all()
+        cards_raw = query.offset((page - 1) * per_page).limit(per_page).all()
 
-        # Общая статистика (без фильтра)
+        # ============ КОНВЕРТИРУЕМ В DICT ВНУТРИ СЕССИИ ============
+        cards = []
+        for c in cards_raw:
+            char = c.character
+            cards.append({
+                "id": char.id,
+                "name": char.display_name,
+                "anime": char.anime_title,
+                "rarity": char.rarity,
+                "rarity_info": char.rarity_info,
+                "count": c.count,
+                "is_favorite": c.is_favorite,
+            })
+
+        # Общая статистика
         total_chars = db.query(Character).filter(Character.is_active == True).count()
         all_user_cards = db.query(UserCard).filter(UserCard.user_id == user_id).count()
         total_animes = db.query(Anime).count()
@@ -730,6 +732,8 @@ async def show_collection_page(
 
     finally:
         db.close()
+
+    # Дальше работаем ТОЛЬКО с dict — сессия уже не нужна
 
     # ============ ПРОВЕРКА ПУСТОЙ ============
     if not cards:
@@ -746,25 +750,27 @@ async def show_collection_page(
                 callback_data="coll_filter_all_1",
             ))
 
+        reply_markup = kb.as_markup() if kb.buttons else None
+
         if edit and isinstance(message_or_callback, types.CallbackQuery):
             try:
-                await message_or_callback.message.edit_text(
-                    text,
-                    reply_markup=kb.as_markup() if kb.buttons else None,
-                    parse_mode="HTML",
-                )
+                await message_or_callback.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
             except:
                 pass
         else:
-            answer_method = message_or_callback.answer if hasattr(message_or_callback, 'answer') else message_or_callback.message.answer
-            await answer_method(text, reply_markup=kb.as_markup() if kb.buttons else None, parse_mode="HTML")
+            answer_method = (
+                message_or_callback.answer
+                if hasattr(message_or_callback, 'answer') and not isinstance(message_or_callback, types.CallbackQuery)
+                else message_or_callback.message.answer
+            )
+            await answer_method(text, reply_markup=reply_markup, parse_mode="HTML")
         return
 
     # ============ ФОРМИРУЕМ ТЕКСТ ============
     text = f"🎴 <b>{user_name}, ваша коллекция</b> "
     text += f"<i>(стр. {page}/{total_pages})</i>\n"
 
-    # Показать активные фильтры
+    # Инфа о фильтрах
     filter_info = []
     if rarity_filter and rarity_filter != "all":
         info = RARITY_INFO.get(rarity_filter, {})
@@ -778,26 +784,25 @@ async def show_collection_page(
         "count": "по количеству",
     }
     filter_info.append(sort_names.get(sort_by, "по имени"))
+    text += f"⚙️ <i>{' • '.join(filter_info)}</i>\n\n"
 
-    text += f"⚙️ <i>Фильтр: {' • '.join(filter_info)}</i>\n\n"
-
-    # Группируем по аниме (если не сортировка по редкости)
-    if sort_by in ("anime", "rarity_desc", "rarity_asc"):
-        # Простой список без группировки (так лучше видно редкость)
+    # Отображение карточек
+    if sort_by in ("rarity_desc", "rarity_asc"):
+        # Простой список (для сортировки по редкости)
         for card in cards:
-            info = card.character.rarity_info
-            fav = "⭐ " if card.is_favorite else ""
-            count_badge = f" ×{card.count}" if card.count > 1 else ""
+            info = card["rarity_info"]
+            fav = "⭐ " if card["is_favorite"] else ""
+            count_badge = f" ×{card['count']}" if card["count"] > 1 else ""
 
             text += (
-                f"{info['emoji']} <b>{card.character.display_name}</b>{count_badge} "
-                f"{fav}| id: <code>{card.character.id}</code>\n"
+                f"{info['emoji']} <b>{card['name']}</b>{count_badge} "
+                f"{fav}| id: <code>{card['id']}</code>\n"
             )
     else:
         # Группировка по аниме
         grouped = {}
         for card in cards:
-            anime = card.character.anime_title
+            anime = card["anime"]
             if anime not in grouped:
                 grouped[anime] = []
             grouped[anime].append(card)
@@ -805,17 +810,17 @@ async def show_collection_page(
         for anime_name, anime_cards in grouped.items():
             text += f"🌸 <b>{anime_name}:</b>\n"
             for card in anime_cards:
-                info = card.character.rarity_info
-                fav = "⭐ " if card.is_favorite else ""
-                count_badge = f" ×{card.count}" if card.count > 1 else ""
+                info = card["rarity_info"]
+                fav = "⭐ " if card["is_favorite"] else ""
+                count_badge = f" ×{card['count']}" if card["count"] > 1 else ""
 
                 text += (
-                    f"  {info['emoji']} <b>{card.character.display_name}</b>{count_badge} "
-                    f"{fav}| id: <code>{card.character.id}</code>\n"
+                    f"  {info['emoji']} <b>{card['name']}</b>{count_badge} "
+                    f"{fav}| id: <code>{card['id']}</code>\n"
                 )
             text += "\n"
 
-    # Статистика внизу
+    # Статистика
     percent = round(all_user_cards / max(total_chars, 1) * 100, 1)
     anime_percent = round(user_animes / max(total_animes, 1) * 100, 1)
 
@@ -829,12 +834,12 @@ async def show_collection_page(
     # ============ КНОПКИ ============
     kb = InlineKeyboardBuilder()
 
-    # 1) Кнопки быстрого просмотра карточек (🔍 ID) — по 4 в ряд
+    # 1) Кнопки быстрого просмотра карточек
     card_buttons = []
     for card in cards:
         card_buttons.append(InlineKeyboardButton(
-            text=f"🔍 {card.character.id}",
-            callback_data=f"view_card_{card.character.id}",
+            text=f"🔍 {card['id']}",
+            callback_data=f"view_card_{card['id']}",
         ))
 
     for i in range(0, len(card_buttons), 4):
@@ -858,39 +863,34 @@ async def show_collection_page(
         ))
     kb.row(*nav_row)
 
-    # 3) Фильтры по редкости (2 ряда)
+    # 3) Фильтры по редкости
     current_filter = rarity_filter or "all"
 
-    # Первый ряд — базовые
     row1 = [
         InlineKeyboardButton(
-            text="🔄 Все" + (" ✓" if current_filter == "all" else ""),
+            text="🔄" + (" ✓" if current_filter == "all" else ""),
             callback_data="coll_filter_all_1",
         ),
     ]
 
-    # Кнопки по редкости — упорядочены от секретной к обычной
-    rarity_order = ["secret", "mythical", "legendary", "epic", "rare", "uncommon", "common", "unique"]
+    rarity_order_list = ["secret", "mythical", "legendary", "epic", "rare", "uncommon", "common", "unique"]
 
     filter_buttons = []
-    for rarity_key in rarity_order:
+    for rarity_key in rarity_order_list:
         if rarity_key not in RARITY_INFO:
             continue
         info = RARITY_INFO[rarity_key]
-        active = " ✓" if current_filter == rarity_key else ""
+        active = "✓" if current_filter == rarity_key else ""
         filter_buttons.append(InlineKeyboardButton(
             text=f"{info['emoji']}{active}",
             callback_data=f"coll_filter_{rarity_key}_1",
         ))
 
-    # Добавляем "Все" + первые 4 редкости в первый ряд
     kb.row(*(row1 + filter_buttons[:4]))
-    # Остальные во второй ряд
     if len(filter_buttons) > 4:
         kb.row(*filter_buttons[4:8])
 
     # 4) Сортировка
-    sort_current = sort_by
     sort_options = [
         ("rarity_desc", "💎↓"),
         ("rarity_asc", "💎↑"),
@@ -901,14 +901,14 @@ async def show_collection_page(
 
     sort_buttons = []
     for sort_key, sort_emoji in sort_options:
-        active = " ✓" if sort_current == sort_key else ""
+        active = "✓" if sort_by == sort_key else ""
         sort_buttons.append(InlineKeyboardButton(
             text=f"{sort_emoji}{active}",
             callback_data=f"coll_sort_{sort_key}_{rarity_filter or 'all'}_{page}",
         ))
     kb.row(*sort_buttons)
 
-    # 5) Открыть в приложении (только ЛС)
+    # 5) Открыть в приложении (ЛС)
     if is_pv:
         add_game_button(kb, True, text="🎴 Открыть в приложении")
 
@@ -923,11 +923,13 @@ async def show_collection_page(
                 parse_mode="HTML",
             )
         except Exception as e:
-            # Если не удалось отредактировать — просто ответить
             print(f"⚠️ Edit failed: {e}")
-            await message_or_callback.answer("Обновлено")
     else:
-        answer_method = message_or_callback.answer if hasattr(message_or_callback, 'answer') else message_or_callback.message.answer
+        answer_method = (
+            message_or_callback.answer
+            if hasattr(message_or_callback, 'answer') and not isinstance(message_or_callback, types.CallbackQuery)
+            else message_or_callback.message.answer
+        )
         await answer_method(
             text,
             reply_markup=reply_markup,
