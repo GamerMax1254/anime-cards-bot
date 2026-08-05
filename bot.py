@@ -217,7 +217,6 @@ async def noop_callback(callback: types.CallbackQuery):
 async def coll_filter_callback(callback: types.CallbackQuery):
     """Фильтр + пагинация: coll_filter_{rarity}_{page}"""
     parts = callback.data.split("_")
-    # coll_filter_all_1  или  coll_filter_legendary_2
 
     if len(parts) >= 4:
         rarity = parts[2]
@@ -229,13 +228,31 @@ async def coll_filter_callback(callback: types.CallbackQuery):
         rarity = "all"
         page = 1
 
-    await show_collection_page(
-        callback,
-        page=page,
-        edit=True,
-        rarity_filter=rarity if rarity != "all" else None,
-        sort_by="rarity_desc",
-    )
+    # Если сообщение было с фото — удаляем и отправляем новое
+    if callback.message.photo:
+        try:
+            await callback.message.delete()
+        except:
+            pass
+
+        # Отправляем новое как ответ
+        await show_collection_page(
+            callback,
+            page=page,
+            edit=False,  # ← новое сообщение
+            rarity_filter=rarity if rarity != "all" else None,
+            sort_by="rarity_desc",
+        )
+    else:
+        # Обычное текстовое — редактируем
+        await show_collection_page(
+            callback,
+            page=page,
+            edit=True,
+            rarity_filter=rarity if rarity != "all" else None,
+            sort_by="rarity_desc",
+        )
+
     await callback.answer()
 
 
@@ -248,8 +265,6 @@ async def coll_sort_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка")
         return
 
-    # sort_key может быть многосоставным (rarity_desc)
-    # Формат: coll_sort_{sort}_{rarity}_{page}
     try:
         page = int(parts[-1])
         rarity = parts[-2]
@@ -258,14 +273,24 @@ async def coll_sort_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка параметров")
         return
 
+    # Если сообщение с фото — удаляем и отправляем новое
+    if callback.message.photo:
+        try:
+            await callback.message.delete()
+        except:
+            pass
+        edit = False
+    else:
+        edit = True
+
     await show_collection_page(
         callback,
         page=page,
-        edit=True,
-        rarity_filter=rarity if rarity != "all" else None,   # ← правильное имя
+        edit=edit,
+        rarity_filter=rarity if rarity != "all" else None,
         sort_by=sort_key,
     )
-    await callback.answer(f"Сортировка обновлена")
+    await callback.answer("Сортировка обновлена")
 
 
 def is_private_chat(message: types.Message) -> bool:
@@ -343,34 +368,33 @@ async def cmd_start(message: types.Message):
 
 
 async def send_card_message(
-    target,  # message или callback.message
+    target,
     text: str,
     image_url: str = None,
     reply_markup=None,
     edit: bool = False,
 ):
-    """
-    Универсальная отправка сообщения с карточкой.
-    Если есть картинка — с фото, иначе текстом.
-    """
+    """Универсальная отправка сообщения с карточкой."""
 
-    # Формируем полный URL если это относительный путь
+    # Формируем полный URL если относительный путь
     if image_url and image_url.startswith("/"):
         if WEBAPP_URL and WEBAPP_URL.startswith("https"):
             image_url = WEBAPP_URL.rstrip("/") + image_url
         else:
-            image_url = None  # без публичного URL не отправим
+            image_url = None
 
-    # Если есть картинка — с фото
-    if image_url and image_url.startswith(("http://", "https://")):
+    has_image = image_url and image_url.startswith(("http://", "https://"))
+
+    # Если нужно редактировать — сначала удаляем старое
+    if edit:
         try:
-            # При редактировании — сначала удалим старое сообщение
-            if edit:
-                try:
-                    await target.delete()
-                except:
-                    pass
+            await target.delete()
+        except Exception as e:
+            print(f"⚠️ Delete failed: {e}")
 
+    # С картинкой
+    if has_image:
+        try:
             await target.answer_photo(
                 photo=image_url,
                 caption=text,
@@ -380,24 +404,8 @@ async def send_card_message(
             return
         except Exception as e:
             print(f"⚠️ Photo send error: {e}")
-            # Fallback → без картинки
 
     # Без картинки
-    if edit:
-        try:
-            await target.edit_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
-            return
-        except:
-            # Не получилось редактировать (например, было фото) → удаляем и отправляем новое
-            try:
-                await target.delete()
-            except:
-                pass
-
     await target.answer(
         text,
         reply_markup=reply_markup,
@@ -1109,15 +1117,42 @@ async def show_collection_page(
     reply_markup = kb.as_markup() if kb.buttons else None
 
     if edit and isinstance(message_or_callback, types.CallbackQuery):
+        # Пытаемся отредактировать
         try:
-            await message_or_callback.message.edit_text(
-                text,
-                reply_markup=reply_markup,
-                parse_mode="HTML",
-            )
+            # Если сообщение было с фото — редактировать нельзя, отправляем новое
+            if message_or_callback.message.photo:
+                # Удаляем старое сообщение с фото
+                try:
+                    await message_or_callback.message.delete()
+                except:
+                    pass
+
+                # Отправляем новое
+                await message_or_callback.message.answer(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+            else:
+                # Обычное текстовое — редактируем
+                await message_or_callback.message.edit_text(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
         except Exception as e:
             print(f"⚠️ Edit failed: {e}")
+            # Fallback — отправить как новое
+            try:
+                await message_or_callback.message.answer(
+                    text,
+                    reply_markup=reply_markup,
+                    parse_mode="HTML",
+                )
+            except Exception as e2:
+                print(f"⚠️ Send failed too: {e2}")
     else:
+        # Новое сообщение
         answer_method = (
             message_or_callback.answer
             if hasattr(message_or_callback, 'answer') and not isinstance(message_or_callback, types.CallbackQuery)
