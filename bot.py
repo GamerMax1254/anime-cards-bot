@@ -47,21 +47,52 @@ async def view_card_callback(callback: types.CallbackQuery):
         await callback.answer("❌ Ошибка ID")
         return
 
-    # Получаем данные
+    # Загружаем данные и СРАЗУ конвертируем
     db = get_session()
     try:
         from database import Character, User, UserCard
+        from sqlalchemy.orm import joinedload
 
-        char = db.query(Character).get(card_id)
+        # joinedload — грузим сразу вместе с anime
+        char = db.query(Character).options(
+            joinedload(Character.anime)
+        ).filter(Character.id == card_id).first()
+
         if not char:
             await callback.answer("❌ Карточка не найдена", show_alert=True)
             return
 
+        # ============ КОНВЕРТИРУЕМ В DICT ============
+        char_data = {
+            "id": char.id,
+            "name": char.display_name,
+            "name_en": char.name_en,
+            "name_jp": char.name_jp,
+            "anime_title": char.anime_title,  # обращаемся ВНУТРИ сессии
+            "rarity": char.rarity,
+            "rarity_info": char.rarity_info,
+            "image_url": char.image_url,
+            "description": char.description,
+            "power": char.power,
+            "defense": char.defense,
+            "speed": char.speed,
+        }
+
+        # Карта пользователя
         user_card = db.query(UserCard).filter(
             UserCard.user_id == callback.from_user.id,
             UserCard.character_id == card_id,
         ).first()
 
+        user_card_data = None
+        if user_card:
+            user_card_data = {
+                "count": user_card.count,
+                "is_favorite": user_card.is_favorite,
+                "level": user_card.level,
+            }
+
+        # Статистика
         total_users = db.query(User).count()
         owners_count = db.query(UserCard).filter(
             UserCard.character_id == card_id,
@@ -71,65 +102,72 @@ async def view_card_callback(callback: types.CallbackQuery):
     finally:
         db.close()
 
-    # Формируем текст
-    info = char.rarity_info
+    # ============ ФОРМИРУЕМ ТЕКСТ (используем ТОЛЬКО dict) ============
+    info = char_data["rarity_info"]
     stars = "⭐" * info["stars"]
 
     text = (
         f"🎴 <b>Информация о персонаже</b>\n\n"
-        f"🆔 <b>ID:</b> <code>{char.id}</code>\n"
-        f"👤 <b>Имя:</b> {char.display_name}"
+        f"🆔 <b>ID:</b> <code>{char_data['id']}</code>\n"
+        f"👤 <b>Имя:</b> {char_data['name']}"
     )
 
-    if char.name_en and char.name_en != char.display_name:
-        text += f" (<i>{char.name_en}</i>)"
+    if char_data['name_en'] and char_data['name_en'] != char_data['name']:
+        text += f" (<i>{char_data['name_en']}</i>)"
 
-    text += f"\n📺 <b>Тайтл:</b> {char.anime_title}\n"
+    text += f"\n📺 <b>Тайтл:</b> {char_data['anime_title']}\n"
     text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
-    text += f"⚔️ <b>Статы:</b> ATK {char.power} | DEF {char.defense} | SPD {char.speed}\n"
+    text += f"⚔️ <b>Статы:</b> ATK {char_data['power']} | DEF {char_data['defense']} | SPD {char_data['speed']}\n"
 
-    if char.description:
-        text += f"\n📖 <i>{char.description}</i>\n"
+    if char_data['description']:
+        text += f"\n📖 <i>{char_data['description']}</i>\n"
 
     text += "\n━━━━━━━━━━━━━━━━━━\n"
 
-    if user_card:
-        fav = " ⭐" if user_card.is_favorite else ""
-        text += f"\n✅ <b>Есть у вас:</b> {user_card.count} шт.{fav}"
+    if user_card_data:
+        fav = " ⭐" if user_card_data["is_favorite"] else ""
+        text += f"\n✅ <b>Есть у вас:</b> {user_card_data['count']} шт.{fav}"
     else:
         text += f"\n❌ <b>У вас нет этой карточки</b>"
 
     text += f"\n🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)"
 
-    # Кнопки
+    # ============ КНОПКИ ============
     kb = InlineKeyboardBuilder()
     kb.row(InlineKeyboardButton(
         text="⬅️ Назад к коллекции",
-        callback_data="coll_page_1",
+        callback_data="coll_filter_all_1",
     ))
 
     if callback.message.chat.type == "private":
         add_game_button(kb, True, text="🎴 Открыть в приложении")
 
-    # Пытаемся отредактировать (если было сообщение с текстом)
-    # Или отправляем новое (если было с фото)
+    # ============ ОТПРАВКА ============
     try:
-        # Если картинка есть — отправляем новое сообщение
-        if char.image_url and char.image_url.startswith(("http://", "https://")):
+        if char_data['image_url'] and char_data['image_url'].startswith(("http://", "https://")):
             await callback.message.answer_photo(
-                photo=char.image_url,
+                photo=char_data['image_url'],
                 caption=text,
                 reply_markup=kb.as_markup(),
                 parse_mode="HTML",
             )
         else:
-            await callback.message.edit_text(
-                text,
-                reply_markup=kb.as_markup(),
-                parse_mode="HTML",
-            )
+            # Пытаемся отредактировать — если было текстовое сообщение
+            try:
+                await callback.message.edit_text(
+                    text,
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML",
+                )
+            except:
+                # Если не получилось (было с фото) — отправляем новое
+                await callback.message.answer(
+                    text,
+                    reply_markup=kb.as_markup(),
+                    parse_mode="HTML",
+                )
     except Exception as e:
-        # Fallback — просто отправить
+        print(f"⚠️ Card send error: {e}")
         await callback.message.answer(
             text,
             reply_markup=kb.as_markup(),
@@ -525,102 +563,118 @@ async def cmd_pull3(message: types.Message):
 async def cmd_card(message: types.Message, command: CommandObject = None):
     """Показать подробную информацию о карточке по ID"""
 
-    # Получаем аргументы команды
     if not command or not command.args:
         await message.answer(
             "🎴 <b>Просмотр карточки</b>\n\n"
             "Использование: <code>/card ID</code>\n"
             "Пример: <code>/card 5</code>\n\n"
-            "ID карточки можно узнать в коллекции.",
+            "ID можно узнать в /collection",
             parse_mode="HTML",
         )
         return
 
-    # Парсим ID
     try:
         card_id = int(command.args.strip())
     except ValueError:
         await message.answer("❌ ID должен быть числом. Пример: <code>/card 5</code>", parse_mode="HTML")
         return
 
-    # Получаем данные из БД
+    # Загружаем и сразу конвертируем в dict
     db = get_session()
     try:
         from database import Character, User, UserCard
+        from sqlalchemy.orm import joinedload
 
-        char = db.query(Character).get(card_id)
+        char = db.query(Character).options(
+            joinedload(Character.anime)
+        ).filter(Character.id == card_id).first()
+
         if not char:
             await message.answer(f"❌ Карточка #{card_id} не найдена")
             return
 
-        # У текущего пользователя
+        char_data = {
+            "id": char.id,
+            "name": char.display_name,
+            "name_en": char.name_en,
+            "name_jp": char.name_jp,
+            "anime_title": char.anime_title,
+            "rarity": char.rarity,
+            "rarity_info": char.rarity_info,
+            "image_url": char.image_url,
+            "description": char.description,
+            "power": char.power,
+            "defense": char.defense,
+            "speed": char.speed,
+        }
+
         user_card = db.query(UserCard).filter(
             UserCard.user_id == message.from_user.id,
             UserCard.character_id == card_id,
         ).first()
 
-        # Статистика
+        user_card_data = None
+        if user_card:
+            user_card_data = {
+                "count": user_card.count,
+                "is_favorite": user_card.is_favorite,
+            }
+
         total_users = db.query(User).count()
         owners_count = db.query(UserCard).filter(
             UserCard.character_id == card_id,
         ).distinct(UserCard.user_id).count()
-
         percentage = round((owners_count / total_users * 100), 2) if total_users > 0 else 0
 
     finally:
         db.close()
 
     # Формируем текст
-    info = char.rarity_info
-    stars = "⭐" * info["stars"]
+    info = char_data['rarity_info']
+    stars = "⭐" * info['stars']
 
     text = (
         f"🎴 <b>Информация о персонаже</b>\n\n"
-        f"🆔 <b>ID:</b> <code>{char.id}</code>\n"
-        f"👤 <b>Имя:</b> {char.display_name}"
+        f"🆔 <b>ID:</b> <code>{char_data['id']}</code>\n"
+        f"👤 <b>Имя:</b> {char_data['name']}"
     )
 
-    if char.name_en and char.name_en != char.display_name:
-        text += f" (<i>{char.name_en}</i>)"
+    if char_data['name_en'] and char_data['name_en'] != char_data['name']:
+        text += f" (<i>{char_data['name_en']}</i>)"
 
-    text += f"\n📺 <b>Тайтл:</b> {char.anime_title}\n"
+    text += f"\n📺 <b>Тайтл:</b> {char_data['anime_title']}\n"
     text += f"💎 <b>Редкость:</b> {info['emoji']} {info['name']} {stars}\n"
-    text += f"⚔️ <b>Статы:</b> ATK {char.power} | DEF {char.defense} | SPD {char.speed}\n"
+    text += f"⚔️ <b>Статы:</b> ATK {char_data['power']} | DEF {char_data['defense']} | SPD {char_data['speed']}\n"
 
-    if char.description:
-        text += f"\n📖 <i>{char.description}</i>\n"
+    if char_data['description']:
+        text += f"\n📖 <i>{char_data['description']}</i>\n"
 
     text += "\n━━━━━━━━━━━━━━━━━━\n\n"
 
-    # У вас
-    if user_card:
-        fav = " ⭐" if user_card.is_favorite else ""
-        text += f"✅ <b>Есть у вас:</b> {user_card.count} шт.{fav}\n"
+    if user_card_data:
+        fav = " ⭐" if user_card_data['is_favorite'] else ""
+        text += f"✅ <b>Есть у вас:</b> {user_card_data['count']} шт.{fav}\n"
     else:
         text += f"❌ <b>У вас нет этой карточки</b>\n"
 
     text += f"🌍 <b>Владельцев:</b> {owners_count} ({percentage}% игроков)\n"
 
-    # Кнопки
     kb = InlineKeyboardBuilder()
-
-    # В ЛС — кнопка открыть в приложении
     if is_private_chat(message):
         add_game_button(kb, True, text="🎴 Открыть в приложении")
 
     # Отправка с картинкой если есть
-    if char.image_url and char.image_url.startswith(("http://", "https://")):
+    if char_data['image_url'] and char_data['image_url'].startswith(("http://", "https://")):
         try:
             await message.answer_photo(
-                photo=char.image_url,
+                photo=char_data['image_url'],
                 caption=text,
                 reply_markup=kb.as_markup() if kb.buttons else None,
                 parse_mode="HTML",
             )
             return
         except Exception as e:
-            # Если картинка не загрузилась — отправляем без неё
-            print(f"⚠️ Не удалось отправить картинку: {e}")
+            print(f"⚠️ Photo send error: {e}")
 
     # Без картинки
     await message.answer(
