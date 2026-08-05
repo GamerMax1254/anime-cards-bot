@@ -116,6 +116,8 @@ function loadTab(tab) {
     if (tab === 'users') loadUsers();
     if (tab === 'logs') loadLogs();
     if (tab === 'suggestions') loadSuggestions();
+    if (tab === 'import') loadImportStatus();
+
 }
 
 function fillRaritySelects() {
@@ -667,6 +669,215 @@ function toast(msg, type = '') {
     el.className = 'toast ' + type;
     setTimeout(() => el.classList.add('hidden'), 3000);
     el.classList.remove('hidden');
+}
+
+// ============================================
+// IMPORT
+// ============================================
+let SELECTED_ANIME = new Map(); // id → {title, cover}
+let IMPORT_POLL_INTERVAL = null;
+
+
+async function importSearch() {
+    const query = document.getElementById('import-search-input').value.trim();
+    if (!query) return;
+
+    toast('🔍 Поиск...');
+    try {
+        const results = await api('/api/admin/import/search', {
+            method: 'POST',
+            body: { query },
+        });
+        renderImportResults(results);
+    } catch(e) {
+        toast('❌ Ошибка поиска', 'error');
+    }
+}
+
+
+async function importLoadTop() {
+    toast('🏆 Загрузка топа...');
+    try {
+        const results = await fetch('/api/admin/import/top?count=20', {
+            headers: { 'X-Admin-Key': ADMIN_KEY }
+        }).then(r => r.json());
+        renderImportResults(results);
+    } catch(e) {
+        toast('❌ Ошибка', 'error');
+    }
+}
+
+
+function renderImportResults(results) {
+    const container = document.getElementById('import-results');
+    if (!results || results.length === 0) {
+        container.innerHTML = '<p style="color:var(--text2);text-align:center;padding:20px">Ничего не найдено</p>';
+        return;
+    }
+
+    container.innerHTML = results.map(anime => `
+        <div class="import-anime-card ${SELECTED_ANIME.has(anime.id) ? 'selected' : ''}"
+             onclick="toggleAnimeSelect(${anime.id}, '${(anime.title_en || '').replace(/'/g, "\\'")}', '${anime.cover || ''}')">
+            <img src="${anime.cover || ''}" class="import-anime-cover" onerror="this.style.display='none'">
+            <div class="import-anime-info">
+                <div class="import-anime-title">${anime.title_en}</div>
+                <div class="import-anime-meta">
+                    <span>📅 ${anime.year || '?'}</span>
+                    <span>⭐ ${anime.score || '?'}</span>
+                </div>
+            </div>
+        </div>
+    `).join('');
+}
+
+
+function toggleAnimeSelect(id, title, cover) {
+    if (SELECTED_ANIME.has(id)) {
+        SELECTED_ANIME.delete(id);
+    } else {
+        SELECTED_ANIME.set(id, { title, cover });
+    }
+    updateSelectedList();
+    // Перерисуем результаты чтобы обновить .selected
+    document.querySelectorAll('.import-anime-card').forEach(card => {
+        card.classList.toggle('selected', card.querySelector('.import-anime-title').textContent === title);
+    });
+}
+
+
+function updateSelectedList() {
+    const container = document.getElementById('import-selected-list');
+    const countEl = document.getElementById('import-count');
+    const startBtn = document.getElementById('import-start-btn');
+
+    countEl.textContent = `(${SELECTED_ANIME.size})`;
+    startBtn.disabled = SELECTED_ANIME.size === 0;
+
+    if (SELECTED_ANIME.size === 0) {
+        container.innerHTML = '<p style="color:var(--text2);font-size:13px">Выбери аниме из результатов выше</p>';
+        return;
+    }
+
+    container.innerHTML = Array.from(SELECTED_ANIME.entries()).map(([id, data]) => `
+        <span class="selected-item" onclick="removeSelected(${id})">${data.title}</span>
+    `).join('');
+}
+
+
+function removeSelected(id) {
+    SELECTED_ANIME.delete(id);
+    updateSelectedList();
+    // Убираем выделение
+    document.querySelectorAll('.import-anime-card.selected').forEach(card => {
+        // Не самое элегантное но работает
+        card.classList.remove('selected');
+    });
+    // Перерисовываем текущие результаты
+    document.querySelectorAll('.import-anime-card').forEach(card => {
+        const title = card.querySelector('.import-anime-title').textContent;
+        let isSelected = false;
+        SELECTED_ANIME.forEach(v => {
+            if (v.title === title) isSelected = true;
+        });
+        card.classList.toggle('selected', isSelected);
+    });
+}
+
+
+async function importStart() {
+    if (SELECTED_ANIME.size === 0) return;
+
+    if (!confirm(`Импортировать ${SELECTED_ANIME.size} аниме?`)) return;
+
+    const data = {
+        anime_ids: Array.from(SELECTED_ANIME.keys()),
+        chars_limit: parseInt(document.getElementById('import-chars-limit').value),
+        filter_gender: document.getElementById('import-gender').value || null,
+        download_images: document.getElementById('import-images').value === 'true',
+    };
+
+    try {
+        const r = await api('/api/admin/import/start', {
+            method: 'POST',
+            body: data,
+        });
+
+        if (r.success) {
+            toast('🚀 Импорт запущен!', 'success');
+            document.getElementById('import-progress').classList.remove('hidden');
+            startPollingStatus();
+        } else {
+            toast('❌ Ошибка запуска', 'error');
+        }
+    } catch(e) {
+        toast('❌ Ошибка: ' + e.message, 'error');
+    }
+}
+
+
+function startPollingStatus() {
+    // Пингуем каждые 2 секунды
+    if (IMPORT_POLL_INTERVAL) clearInterval(IMPORT_POLL_INTERVAL);
+
+    IMPORT_POLL_INTERVAL = setInterval(async () => {
+        try {
+            const status = await api('/api/admin/import/status');
+            updateImportStatus(status);
+
+            if (status.finished || !status.running) {
+                clearInterval(IMPORT_POLL_INTERVAL);
+                IMPORT_POLL_INTERVAL = null;
+
+                if (status.finished) {
+                    toast(`✅ Готово! Добавлено ${status.added}`, 'success');
+                    // Обновляем статистику
+                    setTimeout(updateStats, 1000);
+                    setTimeout(loadChars, 1000);
+                    // Очищаем выбор
+                    SELECTED_ANIME.clear();
+                    updateSelectedList();
+                }
+            }
+        } catch(e) {
+            console.error(e);
+        }
+    }, 2000);
+}
+
+
+function updateImportStatus(status) {
+    const progress = status.total > 0 ? (status.progress / status.total * 100) : 0;
+
+    document.getElementById('import-progress-fill').style.width = progress + '%';
+    document.getElementById('import-progress-text').textContent =
+        `${status.progress}/${status.total} • +${status.added} персонажей`;
+    document.getElementById('import-current').textContent = status.current || '—';
+
+    // Логи
+    const logEl = document.getElementById('import-log');
+    logEl.textContent = (status.log || []).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+
+async function importStop() {
+    await api('/api/admin/import/stop', { method: 'POST' });
+    toast('⏹ Остановка...', 'warning');
+}
+
+
+async function loadImportStatus() {
+    updateSelectedList();
+    try {
+        const status = await api('/api/admin/import/status');
+        if (status.running || status.finished) {
+            document.getElementById('import-progress').classList.remove('hidden');
+            updateImportStatus(status);
+            if (status.running) {
+                startPollingStatus();
+            }
+        }
+    } catch(e) {}
 }
 
 // ============================================

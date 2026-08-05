@@ -4,10 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pathlib import Path
-import shutil
-import uuid
-import hashlib
-import hmac
+import shutil, uuid, hashlib, hmac, threading, queue
+
 from urllib.parse import parse_qsl
 from database import Suggestion
 from datetime import datetime
@@ -15,6 +13,12 @@ from datetime import datetime
 from database import get_session, RARITY_INFO, Character, Anime, User, UserCard, AdminLog
 from gacha import GachaService
 from config import SERVER_HOST, SERVER_PORT, ADMIN_ID, BOT_TOKEN
+
+from import_anilist import (
+    search_anime as anilist_search,
+    import_anime as anilist_import,
+    api_query as anilist_query,
+)
 
 app = FastAPI()
 
@@ -760,3 +764,328 @@ async def api_dust_card(telegram_id: int, character_id: int):
         }
     finally:
         db.close()
+
+
+# ============================================
+# СОСТОЯНИЕ ИМПОРТОВ
+# ============================================
+IMPORT_STATE = {
+    "running": False,
+    "current": "",
+    "progress": 0,
+    "total": 0,
+    "added": 0,
+    "skipped": 0,
+    "log": [],
+    "error": None,
+    "finished": False,
+}
+
+IMPORT_LOCK = threading.Lock()
+
+
+def add_log(message: str):
+    """Добавить в лог импорта"""
+    with IMPORT_LOCK:
+        IMPORT_STATE["log"].append(message)
+        # Держим только последние 100 сообщений
+        if len(IMPORT_STATE["log"]) > 100:
+            IMPORT_STATE["log"] = IMPORT_STATE["log"][-100:]
+
+
+def reset_import_state():
+    """Сброс состояния перед новым импортом"""
+    with IMPORT_LOCK:
+        IMPORT_STATE.update({
+            "running": True,
+            "current": "",
+            "progress": 0,
+            "total": 0,
+            "added": 0,
+            "skipped": 0,
+            "log": [],
+            "error": None,
+            "finished": False,
+        })
+
+
+# ============================================
+# ФОНОВАЯ ФУНКЦИЯ ИМПОРТА
+# ============================================
+def background_import(anime_ids: list, chars_limit: int, filter_gender: str, download_images: bool):
+    """Импорт в отдельном потоке"""
+    try:
+        reset_import_state()
+
+        with IMPORT_LOCK:
+            IMPORT_STATE["total"] = len(anime_ids)
+
+        add_log(f"🚀 Начинаем импорт {len(anime_ids)} аниме")
+        add_log(f"⚙️ Настройки: {chars_limit} персонажей, пол={filter_gender or 'все'}, картинки={download_images}")
+
+        total_added = 0
+        total_skipped = 0
+
+        for i, anime_id in enumerate(anime_ids, 1):
+            # Получаем инфо об аниме
+            gql = """
+            query ($id: Int) {
+              Media(id: $id, type: ANIME) {
+                id
+                title { romaji english native }
+                genres
+              }
+            }
+            """
+            anime_data = anilist_query(gql, {"id": anime_id})
+
+            if not anime_data or not anime_data.get("Media"):
+                add_log(f"❌ [{i}/{len(anime_ids)}] Не удалось загрузить аниме #{anime_id}")
+                continue
+
+            anime = anime_data["Media"]
+            title = anime["title"].get("english") or anime["title"]["romaji"]
+
+            with IMPORT_LOCK:
+                IMPORT_STATE["current"] = title
+                IMPORT_STATE["progress"] = i - 1
+
+            add_log(f"\n📥 [{i}/{len(anime_ids)}] {title}")
+
+            # Импорт через оригинальную функцию
+            # Но нам нужны свои логи вместо print
+            added = import_anime_with_logs(
+                anime,
+                chars_limit=chars_limit,
+                download_images=download_images,
+                filter_gender=filter_gender,
+            )
+
+            total_added += added
+
+        with IMPORT_LOCK:
+            IMPORT_STATE["progress"] = len(anime_ids)
+            IMPORT_STATE["added"] = total_added
+            IMPORT_STATE["finished"] = True
+            IMPORT_STATE["running"] = False
+
+        add_log(f"\n🎉 ГОТОВО! Добавлено {total_added} персонажей")
+
+    except Exception as e:
+        add_log(f"❌ ОШИБКА: {e}")
+        with IMPORT_LOCK:
+            IMPORT_STATE["error"] = str(e)
+            IMPORT_STATE["running"] = False
+            IMPORT_STATE["finished"] = True
+
+
+def import_anime_with_logs(anime_data, chars_limit, download_images, filter_gender):
+    """
+    Копия import_anime но с логами через add_log.
+    """
+    from import_anilist import (
+        get_anime_with_characters,
+        determine_rarity,
+        calculate_stats,
+        normalize_gender,
+        clean_description,
+        download_image,
+    )
+    from database import get_session, Character, Anime, RARITY_INFO
+
+    db = get_session()
+
+    try:
+        title = anime_data["title"]
+        title_en = title.get("english") or title["romaji"]
+
+        # Аниме
+        existing = db.query(Anime).filter(Anime.title_en == title_en).first()
+        if existing:
+            add_log(f"✅ Аниме '{title_en}' уже есть")
+            anime = existing
+        else:
+            anime = Anime(
+                title_en=title_en,
+                genre=",".join([g.lower() for g in anime_data.get("genres", [])]),
+            )
+            db.add(anime)
+            db.commit()
+            add_log(f"✅ Добавлено: {title_en}")
+
+        # Персонажи
+        full = get_anime_with_characters(anime_data["id"], chars_limit=chars_limit + 10)
+        if not full:
+            add_log("❌ Не удалось загрузить персонажей")
+            return 0
+
+        edges = full["characters"]["edges"]
+
+        if filter_gender:
+            edges = [e for e in edges if normalize_gender(e["node"].get("gender")) == filter_gender]
+
+        edges = edges[:chars_limit]
+
+        add_log(f"📊 Импортирую {len(edges)} персонажей...")
+
+        added = 0
+        for i, edge in enumerate(edges, 1):
+            char = edge["node"]
+            role = edge["role"]
+            name_en = char["name"]["full"]
+            gender = normalize_gender(char.get("gender"))
+            favourites = char.get("favourites", 0)
+
+            existing_char = db.query(Character).filter(
+                Character.name_en == name_en,
+                Character.anime_id == anime.id,
+            ).first()
+
+            if existing_char:
+                add_log(f"  ⏭ [{i}/{len(edges)}] {name_en} — уже есть")
+                continue
+
+            rarity = determine_rarity(favourites, role)
+            stats = calculate_stats(favourites, rarity)
+
+            image_url = None
+            if download_images and char.get("image", {}).get("large"):
+                image_url = download_image(char["image"]["large"], char["id"])
+
+            description = clean_description(char.get("description"))
+
+            new_char_data = {
+                "name_en": name_en,
+                "name_jp": char["name"].get("native", ""),
+                "anime_id": anime.id,
+                "rarity": rarity,
+                "image_url": image_url,
+                "description": description,
+                "power": stats["power"],
+                "defense": stats["defense"],
+                "speed": stats["speed"],
+                "is_active": True,
+            }
+
+            try:
+                new_char_data["gender"] = gender
+                new_char = Character(**new_char_data)
+            except TypeError:
+                new_char_data.pop("gender", None)
+                new_char = Character(**new_char_data)
+
+            db.add(new_char)
+            db.commit()
+
+            info = RARITY_INFO[rarity]
+            g_icon = {"male": "♂", "female": "♀"}.get(gender, "")
+            img_ok = "🖼" if image_url else ""
+            add_log(f"  ✅ [{i}/{len(edges)}] {info['emoji']} {name_en} {g_icon} {img_ok}")
+
+            added += 1
+
+        return added
+
+    finally:
+        db.close()
+
+
+# ============================================
+# API ЭНДПОИНТЫ
+# ============================================
+
+@app.post("/api/admin/import/search")
+async def admin_import_search(data: dict, _: bool = Depends(verify_admin)):
+    """Поиск аниме на AniList"""
+    query = data.get("query", "").strip()
+    if not query:
+        return []
+
+    try:
+        results = anilist_search(query, limit=10)
+        return [{
+            "id": a["id"],
+            "title_en": a["title"].get("english") or a["title"]["romaji"],
+            "title_native": a["title"].get("native"),
+            "year": a.get("startDate", {}).get("year"),
+            "score": a.get("averageScore"),
+            "popularity": a.get("popularity"),
+            "cover": a.get("coverImage", {}).get("large"),
+            "genres": a.get("genres", []),
+        } for a in results]
+    except Exception as e:
+        raise HTTPException(500, f"Ошибка поиска: {e}")
+
+
+@app.post("/api/admin/import/start")
+async def admin_import_start(data: dict, _: bool = Depends(verify_admin)):
+    """Запуск импорта в фоне"""
+
+    if IMPORT_STATE["running"]:
+        raise HTTPException(400, "Импорт уже запущен!")
+
+    anime_ids = data.get("anime_ids", [])
+    chars_limit = int(data.get("chars_limit", 15))
+    filter_gender = data.get("filter_gender") or None
+    download_images = bool(data.get("download_images", True))
+
+    if not anime_ids:
+        raise HTTPException(400, "Не выбраны аниме")
+
+    # Запускаем в фоне
+    thread = threading.Thread(
+        target=background_import,
+        args=(anime_ids, chars_limit, filter_gender, download_images),
+        daemon=True,
+    )
+    thread.start()
+
+    return {"success": True, "message": "Импорт запущен"}
+
+
+@app.get("/api/admin/import/status")
+async def admin_import_status(_: bool = Depends(verify_admin)):
+    """Статус текущего импорта"""
+    with IMPORT_LOCK:
+        return dict(IMPORT_STATE)
+
+
+@app.post("/api/admin/import/stop")
+async def admin_import_stop(_: bool = Depends(verify_admin)):
+    """Остановить импорт (флаг)"""
+    with IMPORT_LOCK:
+        IMPORT_STATE["running"] = False
+    return {"success": True}
+
+
+@app.get("/api/admin/import/top")
+async def admin_import_top(count: int = 20, _: bool = Depends(verify_admin)):
+    """Получить топ популярных аниме"""
+    gql = """
+    query ($perPage: Int) {
+      Page(perPage: $perPage) {
+        media(type: ANIME, sort: [POPULARITY_DESC]) {
+          id
+          title { romaji english native }
+          startDate { year }
+          averageScore
+          popularity
+          coverImage { large }
+          genres
+        }
+      }
+    }
+    """
+    data = anilist_query(gql, {"perPage": min(count, 50)})
+    if not data:
+        return []
+
+    return [{
+        "id": a["id"],
+        "title_en": a["title"].get("english") or a["title"]["romaji"],
+        "year": a.get("startDate", {}).get("year"),
+        "score": a.get("averageScore"),
+        "popularity": a.get("popularity"),
+        "cover": a.get("coverImage", {}).get("large"),
+        "genres": a.get("genres", [])[:3],
+    } for a in data["Page"]["media"]]

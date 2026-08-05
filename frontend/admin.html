@@ -33,6 +33,7 @@
             <button class="tab" data-tab="users">👥 Игроки</button>
             <button class="tab" data-tab="give">🎁 Выдача</button>
             <button class="tab" data-tab="suggestions">💡 Предложки <span id="badge-suggestions" class="badge hidden">0</span></button>
+            <button class="tab" data-tab="import">📥 Импорт</button>
             <button class="tab" data-tab="logs">📜 Логи</button>
         </nav>
 
@@ -123,6 +124,69 @@
                 </select>
             </div>
             <div id="sg-admin-list"></div>
+        </section>
+        <!-- ИМПОРТ ИЗ ANILIST -->
+        <section id="page-import" class="page">
+            <h2 style="margin-bottom:16px">📥 Импорт из AniList</h2>
+
+            <!-- Настройки -->
+            <div class="import-settings">
+                <div class="form-grid">
+                    <div>
+                        <label>📊 Персонажей на аниме</label>
+                        <input type="number" id="import-chars-limit" value="15" min="1" max="50">
+                    </div>
+                    <div>
+                        <label>👤 Пол</label>
+                        <select id="import-gender">
+                            <option value="">Все</option>
+                            <option value="male">♂️ Мужской</option>
+                            <option value="female">♀️ Женский</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label>🖼 Картинки</label>
+                        <select id="import-images">
+                            <option value="true">Скачивать</option>
+                            <option value="false">Без картинок</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Поиск -->
+            <div class="import-search">
+                <h3>🔍 Поиск аниме</h3>
+                <div class="import-search-row">
+                    <input type="text" id="import-search-input" placeholder="Например: Naruto, One Piece...">
+                    <button class="btn btn-primary" onclick="importSearch()">🔍 Найти</button>
+                    <button class="btn btn-secondary" onclick="importLoadTop()">🏆 Топ-20</button>
+                </div>
+            </div>
+
+            <!-- Результаты поиска -->
+            <div id="import-results" class="import-results"></div>
+
+            <!-- Выбранные для импорта -->
+            <div class="import-selected">
+                <h3>📋 Выбрано для импорта <span id="import-count">(0)</span></h3>
+                <div id="import-selected-list"></div>
+                <button class="btn btn-primary" id="import-start-btn" onclick="importStart()" disabled>
+                    🚀 Начать импорт
+                </button>
+            </div>
+
+            <!-- Прогресс -->
+            <div id="import-progress" class="import-progress hidden">
+                <h3>⏳ Импорт идёт...</h3>
+                <div class="progress-bar" style="height:30px">
+                    <div class="progress-fill" id="import-progress-fill"></div>
+                    <span class="progress-text" id="import-progress-text">0/0</span>
+                </div>
+                <p><b>Текущее:</b> <span id="import-current">—</span></p>
+                <div class="import-log" id="import-log"></div>
+                <button class="btn btn-danger" onclick="importStop()">⏹ Остановить</button>
+            </div>
         </section>
     </div>
 
